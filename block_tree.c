@@ -38,6 +38,7 @@ const size_t THREAD_COUNT_FALLBACK = 4;
 const size_t ARENA_BLOCK_SIZE = 1024 * 1024 * 64; // 64 MiB
 const size_t FILE_BATCH_SIZE = 4096;
 const char *DUPLICATES_FILENAME = "duplicates.txt";
+const char *DEFAULT_MASK = "*.txt";
 
 // ==========================================
 // 2. Data Structures
@@ -1500,6 +1501,12 @@ static void render_progress(size_t done, size_t total, size_t bytes_done,
   fflush(stderr);
 }
 
+static void print_usage(const char *prog) {
+  fprintf(stderr,
+          "Usage: %s <input_dir> <output_dir> [mask] [--write-duplicates]\n",
+          prog);
+}
+
 static bool process_text(const char *label, const uint8_t *raw_text,
                          size_t byte_len) {
   uint32_t *text = nullptr;
@@ -1669,15 +1676,45 @@ static bool process_batch(FileItem *batch, size_t batch_count,
 }
 
 int main(int argc, char **argv) {
-  if (argc < 3 || argc > 4) {
-    fprintf(stderr, "Usage: %s <input_dir> <output_dir> [mask]\n", argv[0]);
+  double overall_start = now_seconds();
+  const char *input_dir = nullptr;
+  const char *output_dir = nullptr;
+  const char *mask = DEFAULT_MASK;
+  bool mask_set = false;
+  bool write_duplicates = false;
+
+  for (int i = 1; i < argc; ++i) {
+    const char *arg = argv[i];
+    if (strcmp(arg, "--write-duplicates") == 0) {
+      write_duplicates = true;
+      continue;
+    }
+    if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+      print_usage(argv[0]);
+      return 0;
+    }
+    if (!input_dir) {
+      input_dir = arg;
+      continue;
+    }
+    if (!output_dir) {
+      output_dir = arg;
+      continue;
+    }
+    if (!mask_set) {
+      mask = arg;
+      mask_set = true;
+      continue;
+    }
+    fprintf(stderr, "Unexpected argument: %s\n", arg);
+    print_usage(argv[0]);
     return 1;
   }
 
-  double overall_start = now_seconds();
-  const char *input_dir = argv[1];
-  const char *output_dir = argv[2];
-  const char *mask = (argc == 4) ? argv[3] : "*.txt";
+  if (!input_dir || !output_dir) {
+    print_usage(argv[0]);
+    return 1;
+  }
 
   if (!ensure_directory(input_dir, false)) {
     return 1;
@@ -1714,20 +1751,22 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  duplicates_path = join_path(output_dir, DUPLICATES_FILENAME);
-  if (!duplicates_path) {
-    fprintf(stderr, "Failed to allocate duplicates output path.\n");
-    sentence_set_destroy(&seen);
-    closedir(dir);
-    return 1;
-  }
-  duplicates_fp = fopen(duplicates_path, "wb");
-  if (!duplicates_fp) {
-    fprintf(stderr, "Failed to open duplicates file: %s\n", duplicates_path);
-    free(duplicates_path);
-    sentence_set_destroy(&seen);
-    closedir(dir);
-    return 1;
+  if (write_duplicates) {
+    duplicates_path = join_path(output_dir, DUPLICATES_FILENAME);
+    if (!duplicates_path) {
+      fprintf(stderr, "Failed to allocate duplicates output path.\n");
+      sentence_set_destroy(&seen);
+      closedir(dir);
+      return 1;
+    }
+    duplicates_fp = fopen(duplicates_path, "wb");
+    if (!duplicates_fp) {
+      fprintf(stderr, "Failed to open duplicates file: %s\n", duplicates_path);
+      free(duplicates_path);
+      sentence_set_destroy(&seen);
+      closedir(dir);
+      return 1;
+    }
   }
 
   struct dirent *entry;

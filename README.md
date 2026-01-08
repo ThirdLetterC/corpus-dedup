@@ -19,3 +19,8 @@ Example:
 cc -std=c2x -O3 -pthread -DHASH_UNROLL=8 block_tree.c -o block_tree
 BLOCK_TREE_THREADS=8 ./block_tree data/dedup out
 ```
+
+Optional flags:
+
+- `--write-duplicates` to write duplicate sentences into `duplicates.txt` in the
+  output directory (disabled by default).
