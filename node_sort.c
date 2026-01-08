@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "block_tree_asm_defs.h"
+#include "config.h"
 
 #ifndef WAVESORT_USE_ASM
 #if defined(__AVX2__) && defined(__x86_64__) &&                                \
@@ -18,7 +19,7 @@
 #define RADIX_SORT_USE_ASM 0
 #endif
 #ifndef RADIX_SORT_USE_ASM_IMPL
-#define RADIX_SORT_USE_ASM_IMPL 0
+#define RADIX_SORT_USE_ASM_IMPL RADIX_SORT_USE_ASM
 #endif
 #ifndef WAVESORT_USE_ASM
 #define WAVESORT_USE_ASM 0
@@ -453,7 +454,6 @@ static void radix_pass_block_id(BlockNode **src, BlockNode **dst, size_t count,
 bool radix_sort_block_nodes(BlockNode **items, BlockNode **tmp, size_t count) {
   if (count <= 1)
     return true;
-  enum { RADIX_SORT_MIN_COUNT = 64 };
   if (count < RADIX_SORT_MIN_COUNT) {
     wavesort_block_nodes(items, tmp, count);
     return true;

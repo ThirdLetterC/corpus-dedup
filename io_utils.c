@@ -8,8 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
   if (!path || !out || !out_len)
@@ -21,29 +23,25 @@ bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
     return false;
   }
 
-  if (fseeko(fp, 0, SEEK_END) != 0) {
-    fprintf(stderr, "Failed to seek input file: %s\n", path);
+  int fd = fileno(fp);
+  struct stat st;
+  if (fd < 0 || fstat(fd, &st) != 0) {
+    fprintf(stderr, "Failed to stat input file: %s\n", path);
     fclose(fp);
     return false;
   }
-  off_t file_size = ftello(fp);
-  if (file_size < 0) {
-    fprintf(stderr, "Failed to get input file size: %s\n", path);
+  if (!S_ISREG(st.st_mode)) {
+    fprintf(stderr, "Not a regular file: %s\n", path);
     fclose(fp);
     return false;
   }
-  if ((uintmax_t)file_size > SIZE_MAX) {
+  if ((uintmax_t)st.st_size > SIZE_MAX) {
     fprintf(stderr, "Input file too large: %s\n", path);
     fclose(fp);
     return false;
   }
-  if (fseeko(fp, 0, SEEK_SET) != 0) {
-    fprintf(stderr, "Failed to rewind input file: %s\n", path);
-    fclose(fp);
-    return false;
-  }
 
-  size_t byte_len = (size_t)file_size;
+  size_t byte_len = (size_t)st.st_size;
   size_t alloc_size = 0;
   if (ckd_add(&alloc_size, byte_len, (size_t)1)) {
     fprintf(stderr, "Input file too large: %s\n", path);
@@ -57,18 +55,43 @@ bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
     return false;
   }
 
-  size_t read_count = fread(buffer, 1, byte_len, fp);
-  fclose(fp);
-  if (read_count != byte_len) {
-    fprintf(stderr, "Failed to read full input file: %s\n", path);
-    free(buffer);
-    return false;
+  bool mapped_used = false;
+  void *mapped = MAP_FAILED;
+  if (byte_len > 0) {
+    mapped = mmap(nullptr, byte_len, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mapped != MAP_FAILED) {
+#if defined(MADV_SEQUENTIAL)
+      madvise(mapped, byte_len, MADV_SEQUENTIAL);
+#endif
+      mapped_used = true;
+      const char8_t *src = (const char8_t *)mapped;
+      for (size_t i = 0; i < byte_len; ++i) {
+        char8_t c = src[i];
+        buffer[i] =
+            (c == (char8_t)'\n' || c == (char8_t)'\r') ? (char8_t)' ' : c;
+      }
+    }
   }
 
-  for (size_t i = 0; i < byte_len; ++i) {
-    char8_t c = buffer[i];
-    buffer[i] = (c == (char8_t)'\n' || c == (char8_t)'\r') ? (char8_t)' ' : c;
+  if (!mapped_used) {
+    size_t read_count = fread(buffer, 1, byte_len, fp);
+    if (read_count != byte_len) {
+      fprintf(stderr, "Failed to read full input file: %s\n", path);
+      free(buffer);
+      fclose(fp);
+      return false;
+    }
+    for (size_t i = 0; i < byte_len; ++i) {
+      char8_t c = buffer[i];
+      buffer[i] = (c == (char8_t)'\n' || c == (char8_t)'\r') ? (char8_t)' ' : c;
+    }
   }
+
+  if (mapped != MAP_FAILED) {
+    munmap(mapped, byte_len);
+  }
+  fclose(fp);
+
   buffer[byte_len] = (char8_t)'\0';
 
   *out = buffer;
