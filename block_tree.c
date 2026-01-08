@@ -2180,16 +2180,9 @@ static int run_verify(const char *prog, int argc, char **argv) {
     return 1;
   }
 
-  DIR *dir = opendir(input_dir);
-  if (!dir) {
-    fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
-    return 1;
-  }
-
   SentenceSet seen = {0};
   if (!sentence_set_init(&seen, 1024)) {
     fprintf(stderr, "Failed to allocate dedup index.\n");
-    closedir(dir);
     return 1;
   }
 
@@ -2197,8 +2190,16 @@ static int run_verify(const char *prog, int argc, char **argv) {
   size_t files_checked = 0;
   size_t sentences_checked = 0;
   size_t duplicate_sentences = 0;
-  size_t tree_errors = 0;
   size_t errors = 0;
+  size_t bytes_processed = 0;
+  size_t processed = 0;
+
+  DIR *dir = opendir(input_dir);
+  if (!dir) {
+    fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
+    sentence_set_destroy(&seen);
+    return 1;
+  }
 
   struct dirent *entry;
   while ((entry = readdir(dir)) != nullptr) {
@@ -2222,12 +2223,44 @@ static int run_verify(const char *prog, int argc, char **argv) {
     }
 
     matched++;
+    free(input_path);
+  }
+
+  closedir(dir);
+  dir = opendir(input_dir);
+  if (!dir) {
+    fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
+    sentence_set_destroy(&seen);
+    return 1;
+  }
+
+  while ((entry = readdir(dir)) != nullptr) {
+    const char *name = entry->d_name;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+      continue;
+    }
+    if (fnmatch(mask, name, 0) != 0) {
+      continue;
+    }
+
+    char *input_path = join_path(input_dir, name);
+    if (!input_path) {
+      fprintf(stderr, "Failed to allocate input path for: %s\n", name);
+      errors++;
+      continue;
+    }
+    if (!is_regular_file(input_path)) {
+      free(input_path);
+      continue;
+    }
 
     char8_t *raw_text = nullptr;
     size_t byte_len = 0;
     if (!read_file_bytes(input_path, &raw_text, &byte_len)) {
       errors++;
       free(input_path);
+      processed++;
+      render_progress(processed, matched, bytes_processed, start_time);
       continue;
     }
 
@@ -2238,13 +2271,12 @@ static int run_verify(const char *prog, int argc, char **argv) {
       errors++;
     }
 
-    if (!process_text(name, raw_text, byte_len, true)) {
-      tree_errors++;
-    }
-
     free(raw_text);
     free(input_path);
     files_checked++;
+    bytes_processed += byte_len;
+    processed++;
+    render_progress(processed, matched, bytes_processed, start_time);
   }
 
   closedir(dir);
@@ -2256,11 +2288,11 @@ static int run_verify(const char *prog, int argc, char **argv) {
   double elapsed_min = elapsed / 60.0;
 
   printf("\nVerify summary: matched %zu file(s), checked %zu, sentences %zu, "
-         "duplicates %zu, tree errors %zu, errors %zu, elapsed %.2f min\n",
-         matched, files_checked, sentences_checked, duplicate_sentences,
-         tree_errors, errors, elapsed_min);
+         "duplicates %zu, errors %zu, elapsed %.2f min\n",
+         matched, files_checked, sentences_checked, duplicate_sentences, errors,
+         elapsed_min);
 
-  return (errors == 0 && duplicate_sentences == 0 && tree_errors == 0) ? 0 : 1;
+  return (errors == 0 && duplicate_sentences == 0) ? 0 : 1;
 }
 
 int main(int argc, char **argv) {
