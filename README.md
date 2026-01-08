@@ -60,7 +60,7 @@ Optional tuning:
 Example:
 
 ```sh
-cc -std=c2x -O3 -pthread -DHASH_UNROLL=8 -DHASH_WORKER_USE_ASM=0 \
+clang -std=c2x -O3 -pthread -DHASH_UNROLL=8 -DHASH_WORKER_USE_ASM=0 \
   -DRADIX_SORT_USE_ASM=0 block_tree.c sentence_splitter.c -o block_tree
 BLOCK_TREE_THREADS=8 ./block_tree data/dedup out
 ```
@@ -73,3 +73,6 @@ Optional flags:
   (disabled by default).
 - `--verify <dedup_dir> [mask]` to scan an already deduplicated folder, verify
   there are no duplicate sentences, and validate the Block Tree per file.
+- `--search <input_dir> [mask] [--limit N]` to index matching files (optionally
+  stopping after `N`) and run interactive queries over the Block Tree-backed
+  text.

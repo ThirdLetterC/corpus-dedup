@@ -2,6 +2,7 @@ data/
 
 out*
 
+block_tree
 corpus_dedup
 corpus_dedup_optimized
 

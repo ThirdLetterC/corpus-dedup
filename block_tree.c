@@ -74,6 +74,7 @@ const char *DEFAULT_MASK = "*.txt";
 const size_t SENTENCE_ARENA_BLOCK_SIZE = 1024 * 64;
 const size_t HASH_PARALLEL_BASE = 64;
 const size_t RADIX_SORT_MIN_COUNT = 64;
+const size_t SEARCH_CHECKPOINT_STRIDE = 256;
 
 // ==========================================
 // 2. Data Structures
@@ -179,6 +180,26 @@ typedef struct {
   char8_t *raw_text;
   size_t byte_len;
 } FileItem;
+
+typedef struct {
+  char *name;
+  char *input_path;
+  uint32_t *text;
+  size_t text_len;
+  size_t byte_len;
+  size_t invalid;
+  Arena *arena;
+  BlockNode *root;
+  size_t *line_starts;
+  size_t line_count;
+  size_t *checkpoints;
+  size_t checkpoint_count;
+  size_t checkpoint_stride;
+  FILE *fp;
+  size_t cursor_pos;
+  size_t cursor_byte;
+  bool cursor_valid;
+} SearchFile;
 
 // ==========================================
 // 3. Memory Management (Arena)
@@ -1080,6 +1101,49 @@ static bool ensure_ptr_capacity(BlockNode ***buffer, size_t *cap,
   return true;
 }
 
+static bool ensure_size_capacity(size_t **buffer, size_t *cap, size_t needed) {
+  if (*cap >= needed)
+    return true;
+  size_t new_cap = *cap ? *cap : 16;
+  while (new_cap < needed) {
+    size_t next_cap = 0;
+    if (ckd_mul(&next_cap, new_cap, (size_t)2))
+      return false;
+    new_cap = next_cap;
+  }
+  size_t alloc_size = 0;
+  if (ckd_mul(&alloc_size, new_cap, sizeof(**buffer)))
+    return false;
+  size_t *next = realloc(*buffer, alloc_size);
+  if (!next)
+    return false;
+  *buffer = next;
+  *cap = new_cap;
+  return true;
+}
+
+static bool ensure_search_capacity(SearchFile **buffer, size_t *cap,
+                                   size_t needed) {
+  if (*cap >= needed)
+    return true;
+  size_t new_cap = *cap ? *cap : 16;
+  while (new_cap < needed) {
+    size_t next_cap = 0;
+    if (ckd_mul(&next_cap, new_cap, (size_t)2))
+      return false;
+    new_cap = next_cap;
+  }
+  size_t alloc_size = 0;
+  if (ckd_mul(&alloc_size, new_cap, sizeof(**buffer)))
+    return false;
+  SearchFile *next = realloc(*buffer, alloc_size);
+  if (!next)
+    return false;
+  *buffer = next;
+  *cap = new_cap;
+  return true;
+}
+
 void deduplicate_level(BlockNode **candidates, size_t count,
                        const uint32_t *text, BlockNode **next_marked,
                        size_t next_cap, size_t *out_marked_count) {
@@ -1322,6 +1386,63 @@ uint32_t query_access(const BlockNode *node, size_t i, const uint32_t *text) {
   return (uint32_t)'?';
 }
 
+static size_t utf8_decode_advance(const uint8_t *bytes, size_t len,
+                                  uint32_t *out_codepoint, bool *out_invalid) {
+  if (!bytes || len == 0)
+    return 0;
+  uint8_t b0 = bytes[0];
+  uint32_t codepoint = 0xFFFD;
+  size_t advance = 1;
+
+  if (b0 < 0x80) {
+    codepoint = b0;
+  } else if ((b0 & 0xE0) == 0xC0 && len >= 2) {
+    uint8_t b1 = bytes[1];
+    if ((b1 & 0xC0) == 0x80) {
+      codepoint = ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(b1 & 0x3F);
+      if (codepoint >= 0x80) {
+        advance = 2;
+      } else {
+        codepoint = 0xFFFD;
+      }
+    }
+  } else if ((b0 & 0xF0) == 0xE0 && len >= 3) {
+    uint8_t b1 = bytes[1];
+    uint8_t b2 = bytes[2];
+    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
+      codepoint = ((uint32_t)(b0 & 0x0F) << 12) |
+                  ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
+      if (codepoint >= 0x800 && (codepoint < 0xD800 || codepoint > 0xDFFF)) {
+        advance = 3;
+      } else {
+        codepoint = 0xFFFD;
+      }
+    }
+  } else if ((b0 & 0xF8) == 0xF0 && len >= 4) {
+    uint8_t b1 = bytes[1];
+    uint8_t b2 = bytes[2];
+    uint8_t b3 = bytes[3];
+    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 &&
+        (b3 & 0xC0) == 0x80) {
+      codepoint = ((uint32_t)(b0 & 0x07) << 18) |
+                  ((uint32_t)(b1 & 0x3F) << 12) |
+                  ((uint32_t)(b2 & 0x3F) << 6) | (uint32_t)(b3 & 0x3F);
+      if (codepoint >= 0x10000 && codepoint <= 0x10FFFF) {
+        advance = 4;
+      } else {
+        codepoint = 0xFFFD;
+      }
+    }
+  }
+
+  bool invalid = (codepoint == 0xFFFD && b0 >= 0x80);
+  if (out_codepoint)
+    *out_codepoint = codepoint;
+  if (out_invalid)
+    *out_invalid = invalid;
+  return advance;
+}
+
 [[nodiscard]] static bool decode_utf8(const char8_t *input, size_t len,
                                       uint32_t **out, size_t *out_len,
                                       size_t *invalid_count) {
@@ -1346,51 +1467,14 @@ uint32_t query_access(const BlockNode *node, size_t i, const uint32_t *text) {
   size_t invalid = 0;
 
   while (i < len) {
-    uint8_t b0 = bytes[i];
-    uint32_t codepoint = 0xFFFD;
-    size_t advance = 1;
+    uint32_t codepoint = 0;
+    bool invalid_codepoint = false;
+    size_t advance =
+        utf8_decode_advance(bytes + i, len - i, &codepoint, &invalid_codepoint);
+    if (advance == 0)
+      break;
 
-    if (b0 < 0x80) {
-      codepoint = b0;
-    } else if ((b0 & 0xE0) == 0xC0 && i + 1 < len) {
-      uint8_t b1 = bytes[i + 1];
-      if ((b1 & 0xC0) == 0x80) {
-        codepoint = ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(b1 & 0x3F);
-        if (codepoint >= 0x80) {
-          advance = 2;
-        } else {
-          codepoint = 0xFFFD;
-        }
-      }
-    } else if ((b0 & 0xF0) == 0xE0 && i + 2 < len) {
-      uint8_t b1 = bytes[i + 1];
-      uint8_t b2 = bytes[i + 2];
-      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
-        codepoint = ((uint32_t)(b0 & 0x0F) << 12) |
-                    ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
-        if (codepoint >= 0x800 && (codepoint < 0xD800 || codepoint > 0xDFFF)) {
-          advance = 3;
-        } else {
-          codepoint = 0xFFFD;
-        }
-      }
-    } else if ((b0 & 0xF8) == 0xF0 && i + 3 < len) {
-      uint8_t b1 = bytes[i + 1];
-      uint8_t b2 = bytes[i + 2];
-      uint8_t b3 = bytes[i + 3];
-      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
-        codepoint = ((uint32_t)(b0 & 0x07) << 18) |
-                    ((uint32_t)(b1 & 0x3F) << 12) |
-                    ((uint32_t)(b2 & 0x3F) << 6) | (uint32_t)(b3 & 0x3F);
-        if (codepoint >= 0x10000 && codepoint <= 0x10FFFF) {
-          advance = 4;
-        } else {
-          codepoint = 0xFFFD;
-        }
-      }
-    }
-
-    if (codepoint == 0xFFFD && b0 >= 0x80)
+    if (invalid_codepoint)
       invalid++;
     buffer[count++] = codepoint;
     i += advance;
@@ -1424,6 +1508,20 @@ static size_t round_up_pow2(size_t value) {
     p <<= 1;
   }
   return p;
+}
+
+static bool parse_size_arg(const char *value, size_t *out) {
+  if (!value || !out)
+    return false;
+  errno = 0;
+  char *end = nullptr;
+  unsigned long long parsed = strtoull(value, &end, 10);
+  if (errno != 0 || end == value || *end != '\0')
+    return false;
+  if (parsed > SIZE_MAX)
+    return false;
+  *out = (size_t)parsed;
+  return true;
 }
 
 static inline bool is_ascii_space(unsigned char c) { return c <= 0x20; }
@@ -1922,8 +2020,388 @@ static void print_usage(const char *prog) {
           "Usage:\n"
           "  %s <input_dir> <output_dir> [mask] [--write-duplicates] "
           "[--build-block-tree]\n"
-          "  %s --verify <dedup_dir> [mask]\n",
-          prog, prog);
+          "  %s --verify <dedup_dir> [mask]\n"
+          "  %s --search <input_dir> [mask] [--limit N]\n",
+          prog, prog, prog);
+}
+
+static bool build_line_index(const uint32_t *text, size_t len,
+                             size_t **out_starts, size_t *out_count) {
+  if (!out_starts || !out_count)
+    return false;
+  *out_starts = nullptr;
+  *out_count = 0;
+
+  size_t *starts = nullptr;
+  size_t cap = 0;
+  if (!ensure_size_capacity(&starts, &cap, 1))
+    return false;
+  starts[0] = 0;
+  size_t count = 1;
+
+  for (size_t i = 0; i < len; ++i) {
+    if (text[i] == (uint32_t)'\n') {
+      if (!ensure_size_capacity(&starts, &cap, count + 1)) {
+        free(starts);
+        return false;
+      }
+      starts[count++] = i + 1;
+    }
+  }
+
+  *out_starts = starts;
+  *out_count = count;
+  return true;
+}
+
+static void line_col_for_pos(const size_t *starts, size_t count, size_t pos,
+                             size_t *out_line, size_t *out_col) {
+  if (!out_line || !out_col)
+    return;
+  if (!starts || count == 0) {
+    *out_line = 1;
+    *out_col = pos + 1;
+    return;
+  }
+  size_t lo = 0;
+  size_t hi = count;
+  while (lo + 1 < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (starts[mid] <= pos) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  *out_line = lo + 1;
+  *out_col = pos - starts[lo] + 1;
+}
+
+static bool build_utf8_checkpoints(const char8_t *input, size_t len,
+                                   size_t stride, size_t text_len,
+                                   size_t **out_offsets,
+                                   size_t *out_count) {
+  if (!out_offsets || !out_count || stride == 0)
+    return false;
+  *out_offsets = nullptr;
+  *out_count = 0;
+  if (!input || text_len == 0) {
+    size_t *offsets = malloc(sizeof(size_t));
+    if (!offsets)
+      return false;
+    offsets[0] = 0;
+    *out_offsets = offsets;
+    *out_count = 1;
+    return true;
+  }
+
+  size_t checkpoint_count = text_len / stride;
+  if (ckd_add(&checkpoint_count, checkpoint_count, (size_t)1))
+    return false;
+  size_t alloc_size = 0;
+  if (ckd_mul(&alloc_size, checkpoint_count, sizeof(size_t)))
+    return false;
+  size_t *offsets = malloc(alloc_size);
+  if (!offsets)
+    return false;
+
+  offsets[0] = 0;
+  size_t offset_idx = 1;
+  size_t codepoints = 0;
+  size_t byte_idx = 0;
+  const uint8_t *bytes = (const uint8_t *)input;
+
+  while (byte_idx < len && codepoints < text_len) {
+    size_t advance =
+        utf8_decode_advance(bytes + byte_idx, len - byte_idx, nullptr, nullptr);
+    if (advance == 0)
+      break;
+    byte_idx += advance;
+    codepoints++;
+    if (codepoints % stride == 0 && offset_idx < checkpoint_count) {
+      offsets[offset_idx++] = byte_idx;
+    }
+  }
+
+  *out_offsets = offsets;
+  *out_count = offset_idx;
+  return true;
+}
+
+static bool file_text_seek(SearchFile *file, size_t pos) {
+  if (!file || !file->fp || !file->checkpoints || file->checkpoint_count == 0 ||
+      file->checkpoint_stride == 0)
+    return false;
+  size_t idx = pos / file->checkpoint_stride;
+  if (idx >= file->checkpoint_count)
+    idx = file->checkpoint_count - 1;
+  size_t base_pos = idx * file->checkpoint_stride;
+  size_t byte_offset = file->checkpoints[idx];
+  if (fseek(file->fp, (long)byte_offset, SEEK_SET) != 0)
+    return false;
+  file->cursor_pos = base_pos;
+  file->cursor_byte = byte_offset;
+  file->cursor_valid = true;
+  return true;
+}
+
+static bool file_text_advance(SearchFile *file, uint32_t *out) {
+  if (!file || !file->fp || !out)
+    return false;
+  int c0 = fgetc(file->fp);
+  if (c0 == EOF)
+    return false;
+  uint8_t b0 = (uint8_t)c0;
+  uint32_t codepoint = 0xFFFD;
+  size_t advance = 1;
+  bool valid = false;
+
+  if (b0 < 0x80) {
+    codepoint = b0;
+    valid = true;
+  } else if ((b0 & 0xE0) == 0xC0) {
+    uint8_t b1 = 0;
+    if (fread(&b1, 1, 1, file->fp) == 1) {
+      if ((b1 & 0xC0) == 0x80) {
+        codepoint = ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(b1 & 0x3F);
+        if (codepoint >= 0x80) {
+          advance = 2;
+          valid = true;
+        } else {
+          codepoint = 0xFFFD;
+        }
+      }
+    }
+  } else if ((b0 & 0xF0) == 0xE0) {
+    uint8_t b1 = 0;
+    uint8_t b2 = 0;
+    if (fread(&b1, 1, 1, file->fp) == 1 &&
+        fread(&b2, 1, 1, file->fp) == 1) {
+      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
+        codepoint = ((uint32_t)(b0 & 0x0F) << 12) |
+                    ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
+        if (codepoint >= 0x800 && (codepoint < 0xD800 || codepoint > 0xDFFF)) {
+          advance = 3;
+          valid = true;
+        } else {
+          codepoint = 0xFFFD;
+        }
+      }
+    }
+  } else if ((b0 & 0xF8) == 0xF0) {
+    uint8_t b1 = 0;
+    uint8_t b2 = 0;
+    uint8_t b3 = 0;
+    if (fread(&b1, 1, 1, file->fp) == 1 &&
+        fread(&b2, 1, 1, file->fp) == 1 &&
+        fread(&b3, 1, 1, file->fp) == 1) {
+      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 &&
+          (b3 & 0xC0) == 0x80) {
+        codepoint = ((uint32_t)(b0 & 0x07) << 18) |
+                    ((uint32_t)(b1 & 0x3F) << 12) |
+                    ((uint32_t)(b2 & 0x3F) << 6) | (uint32_t)(b3 & 0x3F);
+        if (codepoint >= 0x10000 && codepoint <= 0x10FFFF) {
+          advance = 4;
+          valid = true;
+        } else {
+          codepoint = 0xFFFD;
+        }
+      }
+    }
+  }
+
+  if (!valid) {
+    if (fseek(file->fp, (long)(file->cursor_byte + 1), SEEK_SET) != 0)
+      return false;
+  }
+
+  *out = codepoint;
+  file->cursor_byte += advance;
+  file->cursor_pos++;
+  return true;
+}
+
+static bool file_text_at(SearchFile *file, size_t pos, uint32_t *out) {
+  if (!file || !out || pos >= file->text_len)
+    return false;
+  if (!file->cursor_valid || pos < file->cursor_pos) {
+    if (!file_text_seek(file, pos))
+      return false;
+  }
+  while (file->cursor_pos < pos) {
+    uint32_t skip = 0;
+    if (!file_text_advance(file, &skip))
+      return false;
+  }
+  return file_text_advance(file, out);
+}
+
+static uint32_t query_access_file(const BlockNode *node, size_t i,
+                                  SearchFile *file) {
+  if (!node || !file)
+    return (uint32_t)'?';
+  if (!node->is_marked) {
+    size_t offset = i - node->start_pos;
+    size_t target_global = node->target_pos + offset;
+    uint32_t value = 0;
+    if (!file_text_at(file, target_global, &value))
+      return (uint32_t)'?';
+    return value;
+  }
+
+  if (node->child_count == 0) {
+    uint32_t value = 0;
+    if (!file_text_at(file, i, &value))
+      return (uint32_t)'?';
+    return value;
+  }
+
+  for (size_t k = 0; k < node->child_count; ++k) {
+    BlockNode *child = node->children[k];
+    if (i >= child->start_pos && i < child->start_pos + child->length) {
+      return query_access_file(child, i, file);
+    }
+  }
+  return (uint32_t)'?';
+}
+
+static void free_search_file(SearchFile *file) {
+  if (!file)
+    return;
+  free(file->name);
+  free(file->input_path);
+  free(file->text);
+  free(file->line_starts);
+  free(file->checkpoints);
+  if (file->fp) {
+    fclose(file->fp);
+  }
+  if (file->arena) {
+    arena_destroy(file->arena);
+  }
+  memset(file, 0, sizeof(*file));
+}
+
+static void free_search_files(SearchFile *files, size_t count) {
+  if (!files)
+    return;
+  for (size_t i = 0; i < count; ++i) {
+    free_search_file(&files[i]);
+  }
+  free(files);
+}
+
+static bool load_search_file(SearchFile *file, const char *input_dir,
+                             const char *name) {
+  if (!file || !input_dir || !name)
+    return false;
+  memset(file, 0, sizeof(*file));
+  file->name = dup_string(name);
+  file->input_path = join_path(input_dir, name);
+  if (!file->name || !file->input_path) {
+    free_search_file(file);
+    return false;
+  }
+
+  char8_t *raw_text = nullptr;
+  size_t byte_len = 0;
+  if (!read_file_bytes(file->input_path, &raw_text, &byte_len)) {
+    free_search_file(file);
+    return false;
+  }
+  file->byte_len = byte_len;
+
+  if (!decode_utf8(raw_text, byte_len, &file->text, &file->text_len,
+                   &file->invalid)) {
+    free(raw_text);
+    free_search_file(file);
+    return false;
+  }
+
+  file->arena = arena_create(ARENA_BLOCK_SIZE);
+  if (!file->arena) {
+    free(raw_text);
+    free_search_file(file);
+    return false;
+  }
+
+  file->root = build_block_tree(file->text, file->text_len, 2, 2, file->arena);
+  if (!file->root) {
+    free(raw_text);
+    free_search_file(file);
+    return false;
+  }
+
+  if (!build_line_index(file->text, file->text_len, &file->line_starts,
+                        &file->line_count)) {
+    free(raw_text);
+    free_search_file(file);
+    return false;
+  }
+
+  if (!build_utf8_checkpoints(raw_text, byte_len, SEARCH_CHECKPOINT_STRIDE,
+                              file->text_len, &file->checkpoints,
+                              &file->checkpoint_count)) {
+    free(raw_text);
+    free_search_file(file);
+    return false;
+  }
+
+  file->checkpoint_stride = SEARCH_CHECKPOINT_STRIDE;
+  file->fp = fopen(file->input_path, "rb");
+  if (!file->fp) {
+    fprintf(stderr, "Failed to reopen file for search: %s\n", file->input_path);
+    free(raw_text);
+    free_search_file(file);
+    return false;
+  }
+  file->cursor_valid = false;
+
+  free(raw_text);
+  free(file->text);
+  file->text = nullptr;
+
+  return true;
+}
+
+static size_t search_file_for_query(SearchFile *file,
+                                    const uint32_t *query, size_t query_len) {
+  if (!file || !query || query_len == 0 || !file->root || !file->fp)
+    return 0;
+  if (file->text_len < query_len)
+    return 0;
+
+  file->cursor_valid = false;
+  size_t hits = 0;
+  uint32_t first = query[0];
+  for (size_t i = 0; i + query_len <= file->text_len; ++i) {
+    if (query_access_file(file->root, i, file) != first)
+      continue;
+    size_t j = 1;
+    for (; j < query_len; ++j) {
+      if (query_access_file(file->root, i + j, file) != query[j]) {
+        break;
+      }
+    }
+    if (j == query_len) {
+      size_t line = 0;
+      size_t col = 0;
+      line_col_for_pos(file->line_starts, file->line_count, i, &line, &col);
+      printf("%s:%zu:%zu\n", file->input_path, line, col);
+      hits++;
+    }
+  }
+  return hits;
+}
+
+static void trim_line(char *line) {
+  if (!line)
+    return;
+  size_t len = strlen(line);
+  while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+    line[len - 1] = '\0';
+    len--;
+  }
 }
 
 static bool process_text(const char *label, const char8_t *raw_text,
@@ -2145,6 +2623,233 @@ static bool verify_deduped_lines(const char8_t *input, size_t len,
   return true;
 }
 
+static int run_search(const char *prog, int argc, char **argv) {
+  double start_time = now_seconds();
+  const char *input_dir = nullptr;
+  const char *mask = DEFAULT_MASK;
+  bool mask_set = false;
+  size_t file_limit = SIZE_MAX;
+  bool limit_set = false;
+
+  for (int i = 1; i < argc; ++i) {
+    const char *arg = argv[i];
+    if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+      print_usage(prog);
+      return 0;
+    }
+    if (strcmp(arg, "--limit") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --limit\n");
+        return 1;
+      }
+      size_t parsed = 0;
+      if (!parse_size_arg(argv[++i], &parsed) || parsed == 0) {
+        fprintf(stderr, "Invalid --limit value: %s\n", argv[i]);
+        return 1;
+      }
+      file_limit = parsed;
+      limit_set = true;
+      continue;
+    }
+    if (strncmp(arg, "--limit=", 8) == 0) {
+      size_t parsed = 0;
+      if (!parse_size_arg(arg + 8, &parsed) || parsed == 0) {
+        fprintf(stderr, "Invalid --limit value: %s\n", arg + 8);
+        return 1;
+      }
+      file_limit = parsed;
+      limit_set = true;
+      continue;
+    }
+    if (!input_dir) {
+      input_dir = arg;
+      continue;
+    }
+    if (!mask_set) {
+      mask = arg;
+      mask_set = true;
+      continue;
+    }
+    fprintf(stderr, "Unexpected argument: %s\n", arg);
+    print_usage(prog);
+    return 1;
+  }
+
+  if (!input_dir) {
+    print_usage(prog);
+    return 1;
+  }
+
+  if (!ensure_directory(input_dir, false)) {
+    return 1;
+  }
+
+  size_t matched = 0;
+  DIR *dir = opendir(input_dir);
+  if (!dir) {
+    fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
+    return 1;
+  }
+
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != nullptr) {
+    const char *name = entry->d_name;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+      continue;
+    }
+    if (fnmatch(mask, name, 0) != 0) {
+      continue;
+    }
+    char *input_path = join_path(input_dir, name);
+    if (!input_path) {
+      continue;
+    }
+    bool regular = is_regular_file(input_path);
+    free(input_path);
+    if (!regular) {
+      continue;
+    }
+    matched++;
+    if (limit_set && matched >= file_limit) {
+      break;
+    }
+  }
+
+  closedir(dir);
+
+  if (matched == 0) {
+    fprintf(stderr, "No files matched %s in %s\n", mask, input_dir);
+    return 1;
+  }
+
+  dir = opendir(input_dir);
+  if (!dir) {
+    fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
+    return 1;
+  }
+
+  SearchFile *files = nullptr;
+  size_t files_count = 0;
+  size_t files_cap = 0;
+  size_t processed = 0;
+  size_t bytes_processed = 0;
+  size_t errors = 0;
+  bool abort_scan = false;
+
+  while ((entry = readdir(dir)) != nullptr) {
+    const char *name = entry->d_name;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+      continue;
+    }
+    if (fnmatch(mask, name, 0) != 0) {
+      continue;
+    }
+
+    char *input_path = join_path(input_dir, name);
+    if (!input_path) {
+      errors++;
+      processed++;
+      render_progress(processed, matched, bytes_processed, start_time);
+      continue;
+    }
+    if (!is_regular_file(input_path)) {
+      free(input_path);
+      continue;
+    }
+    free(input_path);
+
+    if (limit_set && processed >= file_limit) {
+      break;
+    }
+
+    if (!ensure_search_capacity(&files, &files_cap, files_count + 1)) {
+      fprintf(stderr, "Failed to allocate search index.\n");
+      errors++;
+      abort_scan = true;
+      break;
+    }
+
+    if (!load_search_file(&files[files_count], input_dir, name)) {
+      fprintf(stderr, "Failed to index file: %s\n", name);
+      errors++;
+    } else {
+      bytes_processed += files[files_count].byte_len;
+      files_count++;
+    }
+
+    processed++;
+    render_progress(processed, matched, bytes_processed, start_time);
+  }
+
+  closedir(dir);
+  fprintf(stderr, "\n");
+
+  if (abort_scan) {
+    free_search_files(files, files_count);
+    return 1;
+  }
+
+  if (limit_set) {
+    printf("Indexed %zu file(s) (limit %zu), errors %zu\n", files_count,
+           file_limit, errors);
+  } else {
+    printf("Indexed %zu file(s), errors %zu\n", files_count, errors);
+  }
+  if (files_count == 0) {
+    free_search_files(files, files_count);
+    return 1;
+  }
+
+  printf("Enter queries to search (empty line or 'exit' to quit).\n");
+  char line[4096];
+  while (true) {
+    printf("search> ");
+    fflush(stdout);
+    if (!fgets(line, sizeof(line), stdin)) {
+      break;
+    }
+    trim_line(line);
+    if (line[0] == '\0' || strcmp(line, "exit") == 0 ||
+        strcmp(line, "quit") == 0) {
+      break;
+    }
+
+    uint32_t *query = nullptr;
+    size_t query_len = 0;
+    size_t invalid = 0;
+    if (!decode_utf8((const char8_t *)line, strlen(line), &query, &query_len,
+                     &invalid)) {
+      fprintf(stderr, "Failed to decode query.\n");
+      continue;
+    }
+    if (query_len == 0) {
+      free(query);
+      continue;
+    }
+
+    size_t total_hits = 0;
+    size_t files_with_hits = 0;
+    for (size_t i = 0; i < files_count; ++i) {
+      size_t hits = search_file_for_query(&files[i], query, query_len);
+      if (hits > 0) {
+        total_hits += hits;
+        files_with_hits++;
+      }
+    }
+
+    if (total_hits == 0) {
+      printf("No matches found.\n");
+    } else {
+      printf("Found %zu match(es) in %zu file(s).\n", total_hits,
+             files_with_hits);
+    }
+    free(query);
+  }
+
+  free_search_files(files, files_count);
+  return errors == 0 ? 0 : 1;
+}
+
 static int run_verify(const char *prog, int argc, char **argv) {
   double start_time = now_seconds();
   const char *input_dir = nullptr;
@@ -2303,6 +3008,10 @@ int main(int argc, char **argv) {
   bool mask_set = false;
   bool write_duplicates = false;
   bool build_block_tree = false;
+
+  if (argc >= 2 && strcmp(argv[1], "--search") == 0) {
+    return run_search(argv[0], argc - 1, argv + 1);
+  }
 
   if (argc >= 2 && strcmp(argv[1], "--verify") == 0) {
     return run_verify(argv[0], argc - 1, argv + 1);
