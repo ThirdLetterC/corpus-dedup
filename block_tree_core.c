@@ -243,8 +243,31 @@ static bool blocks_equal(const BlockNode *a, const BlockNode *b,
                          const uint32_t *text) {
   if (a->length != b->length)
     return false;
-  return memcmp(text + a->start_pos, text + b->start_pos,
-                a->length * sizeof(uint32_t)) == 0;
+
+  constexpr size_t k_probe_words = 4;
+  size_t probe_len = a->length < k_probe_words ? a->length : k_probe_words;
+
+  const uint32_t *lhs = text + a->start_pos;
+  const uint32_t *rhs = text + b->start_pos;
+
+  if (probe_len > 0) {
+    if (memcmp(lhs, rhs, probe_len * sizeof(uint32_t)) != 0)
+      return false;
+    if (a->length > probe_len) {
+      size_t tail_offset = a->length - probe_len;
+      if (memcmp(lhs + tail_offset, rhs + tail_offset,
+                 probe_len * sizeof(uint32_t)) != 0)
+        return false;
+    }
+  }
+
+  size_t middle_len = 0;
+  if (a->length > probe_len * 2)
+    middle_len = a->length - probe_len * 2;
+  if (middle_len == 0)
+    return true;
+  return memcmp(lhs + probe_len, rhs + probe_len,
+                middle_len * sizeof(uint32_t)) == 0;
 }
 
 static bool ensure_ptr_capacity(BlockNode ***buffer, size_t *cap,

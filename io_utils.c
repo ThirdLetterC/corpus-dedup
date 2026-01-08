@@ -50,7 +50,7 @@ bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
     fclose(fp);
     return false;
   }
-  char8_t *buffer = (char8_t *)calloc(alloc_size, sizeof(char8_t));
+  char8_t *buffer = (char8_t *)malloc(alloc_size * sizeof(char8_t));
   if (!buffer) {
     fprintf(stderr, "Failed to allocate text buffer for: %s\n", path);
     fclose(fp);
@@ -66,9 +66,8 @@ bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
   }
 
   for (size_t i = 0; i < byte_len; ++i) {
-    if (buffer[i] == (char8_t)'\n' || buffer[i] == (char8_t)'\r') {
-      buffer[i] = (char8_t)' ';
-    }
+    char8_t c = buffer[i];
+    buffer[i] = (c == (char8_t)'\n' || c == (char8_t)'\r') ? (char8_t)' ' : c;
   }
   buffer[byte_len] = (char8_t)'\0';
 
