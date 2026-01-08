@@ -1,15 +1,14 @@
 // nasm -f elf64 -O3 wavesort.asm -o wavesort.o
 
-// clang -DWAVESORT_USE_ASM=1 -DHASH_PREFETCH_DISTANCE=384 -std=c2x -O3  -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=4 \
+// clang -DWAVESORT_USE_ASM=1 -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3  -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
   -fprofile-generate block_tree.c sentence_splitter.c wavesort.o -o corpus_dedup
 
 // BLOCK_TREE_THREADS=1 ./corpus_dedup data/kobza_1 out
 
-// llvm-profdata merge -output=block_tree.profdata
-// default_6674171548242042490_0.profraw
+// llvm-profdata merge -output=block_tree.profdata default.profraw
 
-// clang -DHASH_PREFETCH_DISTANCE=384 -std=c2x -O3 -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=4 \
-  -fprofile-use=block_tree.profdata sentence_splitter.c block_tree.c -o corpus_dedup_optimized
+// clang -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3 -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
+  -fprofile-use=block_tree.profdata sentence_splitter.c block_tree.c  wavesort.o -o corpus_dedup_optimized
 
 #include <dirent.h>
 #include <errno.h>
