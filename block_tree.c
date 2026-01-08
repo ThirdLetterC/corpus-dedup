@@ -8,22 +8,12 @@
 // clang -DHASH_PREFETCH_DISTANCE=384 -std=c2x -O3 -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=4 \
   -fprofile-use=block_tree.profdata sentence_splitter.c block_tree.c -o corpus_dedup_optimized
 
-/**
- * @file block_tree.c
- * @brief Parallel Block Tree Construction in ISO C23
- * @details Implements a parallel hierarchical text decomposition using
- * rolling hashes, domain decomposition, and arena memory management.
- * * Compiler Flags: -std=c2x -O3 -pthread (or -std=c23)
- */
-
-// Note: link with sentence_splitter.c.
-
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
 #include <inttypes.h>
-#include <stdatomic.h> // Atomic operations
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -31,7 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <threads.h> // C11/C23 Threads
+#include <threads.h>
 #include <time.h>
 #include <unistd.h>
 
