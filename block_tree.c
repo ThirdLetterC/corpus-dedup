@@ -200,6 +200,10 @@ void arena_destroy(Arena *a) {
  */
 // UTF-32 hashing has a scalar ASM path; leave disabled unless needed.
 #define HASH_WORKER_USE_ASM 1
+// Enable radix-sort assembly for dedup sorting (x86_64 + GCC/Clang only).
+#ifndef RADIX_SORT_USE_ASM
+#define RADIX_SORT_USE_ASM 1
+#endif
 // Compile-time unroll factor for hash_worker (valid: 4 or 8).
 #ifndef HASH_UNROLL
 #define HASH_UNROLL 4
@@ -220,6 +224,19 @@ void arena_destroy(Arena *a) {
 #define HASH_MULT_POW2 ((uint64_t)HASH_MULT_POW2_IMM)
 #define HASH_MULT_POW3 ((uint64_t)HASH_MULT_POW3_IMM)
 #define HASH_MULT_POW4 ((uint64_t)HASH_MULT_POW4_IMM)
+
+#if RADIX_SORT_USE_ASM && defined(__x86_64__) &&                              \
+    (defined(__GNUC__) || defined(__clang__))
+#define RADIX_SORT_USE_ASM_IMPL 1
+#define RADIX_NODE_LENGTH_OFFSET 32
+#define RADIX_NODE_BLOCK_ID_OFFSET 48
+_Static_assert(offsetof(BlockNode, length) == RADIX_NODE_LENGTH_OFFSET,
+               "BlockNode layout changed");
+_Static_assert(offsetof(BlockNode, block_id) == RADIX_NODE_BLOCK_ID_OFFSET,
+               "BlockNode layout changed");
+#else
+#define RADIX_SORT_USE_ASM_IMPL 0
+#endif
 
 #if HASH_WORKER_USE_ASM
 #define CTX_NODES 0
@@ -767,19 +784,17 @@ int compare_nodes(const void *a, const void *b) {
   return 0;
 }
 
-static void radix_pass_length(BlockNode **src, BlockNode **dst, size_t count,
-                              unsigned int shift) {
-  size_t buckets[256] = {0};
+static void radix_histogram_length_c(BlockNode **src, size_t count,
+                                     unsigned int shift, size_t *buckets) {
   for (size_t i = 0; i < count; ++i) {
     size_t key = src[i]->length;
     buckets[(key >> shift) & 0xFF]++;
   }
-  size_t sum = 0;
-  for (size_t i = 0; i < 256; ++i) {
-    size_t c = buckets[i];
-    buckets[i] = sum;
-    sum += c;
-  }
+}
+
+static void radix_scatter_length_c(BlockNode **src, BlockNode **dst,
+                                   size_t count, unsigned int shift,
+                                   size_t *buckets) {
   for (size_t i = 0; i < count; ++i) {
     size_t key = src[i]->length;
     size_t idx = (key >> shift) & 0xFF;
@@ -787,24 +802,180 @@ static void radix_pass_length(BlockNode **src, BlockNode **dst, size_t count,
   }
 }
 
-static void radix_pass_block_id(BlockNode **src, BlockNode **dst, size_t count,
-                                unsigned int shift) {
-  size_t buckets[256] = {0};
+static void radix_histogram_block_id_c(BlockNode **src, size_t count,
+                                       unsigned int shift, size_t *buckets) {
   for (size_t i = 0; i < count; ++i) {
     uint64_t key = src[i]->block_id;
     buckets[(key >> shift) & 0xFF]++;
   }
+}
+
+static void radix_scatter_block_id_c(BlockNode **src, BlockNode **dst,
+                                     size_t count, unsigned int shift,
+                                     size_t *buckets) {
+  for (size_t i = 0; i < count; ++i) {
+    uint64_t key = src[i]->block_id;
+    size_t idx = (key >> shift) & 0xFF;
+    dst[buckets[idx]++] = src[i];
+  }
+}
+
+#if RADIX_SORT_USE_ASM_IMPL
+void radix_histogram_length_asm(BlockNode **src, size_t count,
+                                unsigned int shift, size_t *buckets);
+void radix_scatter_length_asm(BlockNode **src, BlockNode **dst, size_t count,
+                              unsigned int shift, size_t *buckets);
+void radix_histogram_block_id_asm(BlockNode **src, size_t count,
+                                  unsigned int shift, size_t *buckets);
+void radix_scatter_block_id_asm(BlockNode **src, BlockNode **dst, size_t count,
+                                unsigned int shift, size_t *buckets);
+
+#ifndef STR
+#define STR2(x) #x
+#define STR(x) STR2(x)
+#endif
+
+__asm__(".intel_syntax noprefix\n"
+        ".text\n"
+        ".globl radix_histogram_length_asm\n"
+        ".type radix_histogram_length_asm,@function\n"
+        "radix_histogram_length_asm:\n"
+        "  test rsi, rsi\n"
+        "  jz 1f\n"
+        "  mov r8, rcx\n"
+        "  mov ecx, edx\n"
+        "  xor rax, rax\n"
+        "0:\n"
+        "  mov r9, qword ptr [rdi + rax*8]\n"
+        "  mov r10, qword ptr [r9 + " STR(RADIX_NODE_LENGTH_OFFSET) "]\n"
+        "  shr r10, cl\n"
+        "  and r10, 0xFF\n"
+        "  lea r11, [r8 + r10*8]\n"
+        "  add qword ptr [r11], 1\n"
+        "  inc rax\n"
+        "  cmp rax, rsi\n"
+        "  jb 0b\n"
+        "1:\n"
+        "  ret\n"
+        ".size radix_histogram_length_asm, .-radix_histogram_length_asm\n"
+        ".att_syntax prefix\n");
+
+__asm__(".intel_syntax noprefix\n"
+        ".text\n"
+        ".globl radix_scatter_length_asm\n"
+        ".type radix_scatter_length_asm,@function\n"
+        "radix_scatter_length_asm:\n"
+        "  test rdx, rdx\n"
+        "  jz 1f\n"
+        "  xor rax, rax\n"
+        "0:\n"
+        "  mov r9, qword ptr [rdi + rax*8]\n"
+        "  mov r10, qword ptr [r9 + " STR(RADIX_NODE_LENGTH_OFFSET) "]\n"
+        "  shr r10, cl\n"
+        "  and r10, 0xFF\n"
+        "  lea r11, [r8 + r10*8]\n"
+        "  mov r10, qword ptr [r11]\n"
+        "  mov qword ptr [rsi + r10*8], r9\n"
+        "  add qword ptr [r11], 1\n"
+        "  inc rax\n"
+        "  cmp rax, rdx\n"
+        "  jb 0b\n"
+        "1:\n"
+        "  ret\n"
+        ".size radix_scatter_length_asm, .-radix_scatter_length_asm\n"
+        ".att_syntax prefix\n");
+
+__asm__(".intel_syntax noprefix\n"
+        ".text\n"
+        ".globl radix_histogram_block_id_asm\n"
+        ".type radix_histogram_block_id_asm,@function\n"
+        "radix_histogram_block_id_asm:\n"
+        "  test rsi, rsi\n"
+        "  jz 1f\n"
+        "  mov r8, rcx\n"
+        "  mov ecx, edx\n"
+        "  xor rax, rax\n"
+        "0:\n"
+        "  mov r9, qword ptr [rdi + rax*8]\n"
+        "  mov r10, qword ptr [r9 + " STR(RADIX_NODE_BLOCK_ID_OFFSET) "]\n"
+        "  shr r10, cl\n"
+        "  and r10, 0xFF\n"
+        "  lea r11, [r8 + r10*8]\n"
+        "  add qword ptr [r11], 1\n"
+        "  inc rax\n"
+        "  cmp rax, rsi\n"
+        "  jb 0b\n"
+        "1:\n"
+        "  ret\n"
+        ".size radix_histogram_block_id_asm, .-radix_histogram_block_id_asm\n"
+        ".att_syntax prefix\n");
+
+__asm__(".intel_syntax noprefix\n"
+        ".text\n"
+        ".globl radix_scatter_block_id_asm\n"
+        ".type radix_scatter_block_id_asm,@function\n"
+        "radix_scatter_block_id_asm:\n"
+        "  test rdx, rdx\n"
+        "  jz 1f\n"
+        "  xor rax, rax\n"
+        "0:\n"
+        "  mov r9, qword ptr [rdi + rax*8]\n"
+        "  mov r10, qword ptr [r9 + " STR(RADIX_NODE_BLOCK_ID_OFFSET) "]\n"
+        "  shr r10, cl\n"
+        "  and r10, 0xFF\n"
+        "  lea r11, [r8 + r10*8]\n"
+        "  mov r10, qword ptr [r11]\n"
+        "  mov qword ptr [rsi + r10*8], r9\n"
+        "  add qword ptr [r11], 1\n"
+        "  inc rax\n"
+        "  cmp rax, rdx\n"
+        "  jb 0b\n"
+        "1:\n"
+        "  ret\n"
+        ".size radix_scatter_block_id_asm, .-radix_scatter_block_id_asm\n"
+        ".att_syntax prefix\n");
+#endif
+
+static void radix_pass_length(BlockNode **src, BlockNode **dst, size_t count,
+                              unsigned int shift) {
+  size_t buckets[256] = {0};
+#if RADIX_SORT_USE_ASM_IMPL
+  radix_histogram_length_asm(src, count, shift, buckets);
+#else
+  radix_histogram_length_c(src, count, shift, buckets);
+#endif
   size_t sum = 0;
   for (size_t i = 0; i < 256; ++i) {
     size_t c = buckets[i];
     buckets[i] = sum;
     sum += c;
   }
-  for (size_t i = 0; i < count; ++i) {
-    uint64_t key = src[i]->block_id;
-    size_t idx = (key >> shift) & 0xFF;
-    dst[buckets[idx]++] = src[i];
+#if RADIX_SORT_USE_ASM_IMPL
+  radix_scatter_length_asm(src, dst, count, shift, buckets);
+#else
+  radix_scatter_length_c(src, dst, count, shift, buckets);
+#endif
+}
+
+static void radix_pass_block_id(BlockNode **src, BlockNode **dst, size_t count,
+                                unsigned int shift) {
+  size_t buckets[256] = {0};
+#if RADIX_SORT_USE_ASM_IMPL
+  radix_histogram_block_id_asm(src, count, shift, buckets);
+#else
+  radix_histogram_block_id_c(src, count, shift, buckets);
+#endif
+  size_t sum = 0;
+  for (size_t i = 0; i < 256; ++i) {
+    size_t c = buckets[i];
+    buckets[i] = sum;
+    sum += c;
   }
+#if RADIX_SORT_USE_ASM_IMPL
+  radix_scatter_block_id_asm(src, dst, count, shift, buckets);
+#else
+  radix_scatter_block_id_c(src, dst, count, shift, buckets);
+#endif
 }
 
 static void radix_sort_block_nodes(BlockNode **items, BlockNode **tmp,
