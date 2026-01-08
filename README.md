@@ -73,6 +73,6 @@ Optional flags:
   (disabled by default).
 - `--verify <dedup_dir> [mask]` to scan an already deduplicated folder, verify
   there are no duplicate sentences, and validate the Block Tree per file.
-- `--search <input_dir> [mask] [--limit N]` to scan matching files per query
-  (optionally stopping after `N`) and run interactive queries over the Block
-  Tree-backed text with low memory usage.
+- `--search <input_dir> [mask] [--limit N]` to index matching files into one
+  Block Tree (optionally stopping after `N`) and run interactive queries over
+  the combined text.
