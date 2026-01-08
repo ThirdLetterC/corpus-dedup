@@ -1,7 +1,7 @@
-#include "arena.h"
-
 #include <stdio.h>
 #include <stdlib.h>
+
+#include "arena.h"
 
 [[nodiscard]] Arena *arena_create(size_t cap) {
   auto a = (Arena *)calloc(1, sizeof(Arena));

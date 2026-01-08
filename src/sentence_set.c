@@ -1,9 +1,8 @@
-#include "sentence_set.h"
-
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 
+#include "sentence_set.h"
 #include "ckdint_compat.h"
 #include "config.h"
 #include "hash_utils.h"

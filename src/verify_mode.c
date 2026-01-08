@@ -1,5 +1,3 @@
-#include "verify_mode.h"
-
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
@@ -7,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "verify_mode.h"
 #include "ckdint_compat.h"
 #include "config.h"
 #include "io_utils.h"

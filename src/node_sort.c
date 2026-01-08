@@ -1,9 +1,8 @@
-#include "node_sort.h"
-
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 
+#include "node_sort.h"
 #include "block_tree_asm_defs.h"
 #include "ckdint_compat.h"
 #include "config.h"

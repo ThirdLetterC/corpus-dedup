@@ -1,5 +1,3 @@
-#include "sentence_splitter.h"
-
 #if defined(__AVX2__) || defined(__SSE2__)
 #include <immintrin.h>
 #endif
@@ -9,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <uchar.h>
+
+#include "sentence_splitter.h"
 
 // --- Constants & Helpers ---
 

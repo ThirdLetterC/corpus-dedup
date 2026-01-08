@@ -1,6 +1,6 @@
-#include "utf8.h"
-
 #include <stdlib.h>
+
+#include "utf8.h"
 
 size_t utf8_decode_advance(const char8_t *bytes, size_t len,
                            uint32_t *out_codepoint, bool *out_invalid) {

@@ -1,5 +1,3 @@
-#include "search_mode.h"
-
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
@@ -11,6 +9,7 @@
 #include <threads.h>
 #include <unistd.h>
 
+#include "search_mode.h"
 #include "arena.h"
 #include "block_tree.h"
 #include "ckdint_compat.h"

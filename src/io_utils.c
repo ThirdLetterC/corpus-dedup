@@ -1,7 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "io_utils.h"
-
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +9,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "io_utils.h"
 #include "ckdint_compat.h"
 #include "utf8.h"
 

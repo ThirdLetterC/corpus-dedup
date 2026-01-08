@@ -1,10 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "progress.h"
-
 #include <inttypes.h>
 #include <stdio.h>
 #include <time.h>
+
+#include "progress.h"
 
 static constexpr uint64_t NS_PER_SEC = 1'000'000'000ull;
 static constexpr uint64_t NS_PER_MS = 1'000'000ull;

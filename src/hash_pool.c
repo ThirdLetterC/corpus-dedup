@@ -1,7 +1,7 @@
-#include "hash_pool.h"
-
 #include <stdlib.h>
 #include <threads.h>
+
+#include "hash_pool.h"
 
 #ifndef HASH_WORKER_USE_ASM
 #define HASH_WORKER_USE_ASM 0

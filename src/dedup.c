@@ -1,5 +1,3 @@
-#include "dedup.h"
-
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
@@ -12,6 +10,7 @@
 #include <threads.h>
 #include <unistd.h>
 
+#include "dedup.h"
 #include "arena.h"
 #include "block_tree.h"
 #include "ckdint_compat.h"
