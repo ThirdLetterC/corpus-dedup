@@ -1,4 +1,4 @@
-# Block Tree
+# Corpus Deduplication Tool
 
 Parallel Block Tree construction and sentence deduplication tool in ISO C23.
 
@@ -35,8 +35,8 @@ paths on x86_64.
 Configure and build:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release    # or Debug
-cmake --build build --config Release
+make debug
+make release
 ```
 
 Options:
