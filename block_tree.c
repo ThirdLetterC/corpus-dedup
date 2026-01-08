@@ -188,7 +188,6 @@ typedef struct {
   size_t text_len;
   size_t byte_len;
   size_t invalid;
-  Arena *arena;
   BlockNode *root;
   size_t *line_starts;
   size_t line_count;
@@ -225,11 +224,24 @@ void *arena_alloc(Arena *a, size_t size) {
   size_t aligned_size = (size + 7) & ~7;
 
   if (a->offset + aligned_size > a->cap) {
-    // Simple strategy: Requires the caller to handle expansion or
-    // implies the initial size was sufficient.
-    // For production, we would allocate a new block here.
-    fprintf(stderr, "Arena overflow! Increase ARENA_BLOCK_SIZE.\n");
-    exit(EXIT_FAILURE);
+    size_t next_cap = a->cap;
+    if (next_cap < aligned_size)
+      next_cap = aligned_size;
+    Arena *old_block = malloc(sizeof(*old_block));
+    if (!old_block) {
+      fprintf(stderr, "Arena overflow! Increase ARENA_BLOCK_SIZE.\n");
+      exit(EXIT_FAILURE);
+    }
+    *old_block = *a;
+    a->ptr = malloc(next_cap);
+    if (!a->ptr) {
+      free(old_block);
+      fprintf(stderr, "Arena overflow! Increase ARENA_BLOCK_SIZE.\n");
+      exit(EXIT_FAILURE);
+    }
+    a->offset = 0;
+    a->cap = next_cap;
+    a->next = old_block;
   }
 
   void *p = a->ptr + a->offset;
@@ -2276,9 +2288,6 @@ static void free_search_file(SearchFile *file) {
   if (file->fp) {
     fclose(file->fp);
   }
-  if (file->arena) {
-    arena_destroy(file->arena);
-  }
   memset(file, 0, sizeof(*file));
 }
 
@@ -2291,8 +2300,8 @@ static void free_search_files(SearchFile *files, size_t count) {
   free(files);
 }
 
-static bool load_search_file(SearchFile *file, const char *input_dir,
-                             const char *name) {
+static bool load_search_file(SearchFile *file, Arena *arena,
+                             const char *input_dir, const char *name) {
   if (!file || !input_dir || !name)
     return false;
   memset(file, 0, sizeof(*file));
@@ -2318,14 +2327,13 @@ static bool load_search_file(SearchFile *file, const char *input_dir,
     return false;
   }
 
-  file->arena = arena_create(ARENA_BLOCK_SIZE);
-  if (!file->arena) {
+  if (!arena) {
     free(raw_text);
     free_search_file(file);
     return false;
   }
 
-  file->root = build_block_tree(file->text, file->text_len, 2, 2, file->arena);
+  file->root = build_block_tree(file->text, file->text_len, 2, 2, arena);
   if (!file->root) {
     free(raw_text);
     free_search_file(file);
@@ -2722,9 +2730,16 @@ static int run_search(const char *prog, int argc, char **argv) {
     return 1;
   }
 
+  Arena *search_arena = arena_create(ARENA_BLOCK_SIZE);
+  if (!search_arena) {
+    fprintf(stderr, "Failed to allocate search arena.\n");
+    return 1;
+  }
+
   dir = opendir(input_dir);
   if (!dir) {
     fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
+    arena_destroy(search_arena);
     return 1;
   }
 
@@ -2769,7 +2784,7 @@ static int run_search(const char *prog, int argc, char **argv) {
       break;
     }
 
-    if (!load_search_file(&files[files_count], input_dir, name)) {
+    if (!load_search_file(&files[files_count], search_arena, input_dir, name)) {
       fprintf(stderr, "Failed to index file: %s\n", name);
       errors++;
     } else {
@@ -2786,6 +2801,7 @@ static int run_search(const char *prog, int argc, char **argv) {
 
   if (abort_scan) {
     free_search_files(files, files_count);
+    arena_destroy(search_arena);
     return 1;
   }
 
@@ -2797,6 +2813,7 @@ static int run_search(const char *prog, int argc, char **argv) {
   }
   if (files_count == 0) {
     free_search_files(files, files_count);
+    arena_destroy(search_arena);
     return 1;
   }
 
@@ -2847,6 +2864,7 @@ static int run_search(const char *prog, int argc, char **argv) {
   }
 
   free_search_files(files, files_count);
+  arena_destroy(search_arena);
   return errors == 0 ? 0 : 1;
 }
 
