@@ -93,9 +93,8 @@ static inline const char *skip_white_space(const char *p, const char *end) {
     if (c == 0xE2 && p + 2 < end) {
       unsigned char c1 = (unsigned char)p[1];
       unsigned char c2 = (unsigned char)p[2];
-      if (c1 == 0x80 &&
-          ((c2 >= 0x80 && c2 <= 0x8A) || c2 == 0xA8 || c2 == 0xA9 ||
-           c2 == 0xAF)) {
+      if (c1 == 0x80 && ((c2 >= 0x80 && c2 <= 0x8A) || c2 == 0xA8 ||
+                         c2 == 0xA9 || c2 == 0xAF)) {
         p += 3;
         continue;
       }
@@ -217,8 +216,8 @@ static inline size_t decode_utf8(const unsigned char *p, size_t len,
     unsigned char c2 = p[2];
     if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80)
       return 0;
-    char32_t cp = (char32_t)(((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) |
-                             (c2 & 0x3F));
+    char32_t cp =
+        (char32_t)(((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F));
     if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
       return 0;
     *out_cp = cp;
@@ -230,8 +229,7 @@ static inline size_t decode_utf8(const unsigned char *p, size_t len,
     unsigned char c1 = p[1];
     unsigned char c2 = p[2];
     unsigned char c3 = p[3];
-    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 ||
-        (c3 & 0xC0) != 0x80)
+    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
       return 0;
     char32_t cp = (char32_t)(((c0 & 0x07) << 18) | ((c1 & 0x3F) << 12) |
                              ((c2 & 0x3F) << 6) | (c3 & 0x3F));
@@ -255,9 +253,8 @@ static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
     __m256i m1 = _mm256_cmpeq_epi8(v, excl);
     __m256i m2 = _mm256_cmpeq_epi8(v, quest);
     __m256i m = _mm256_or_si256(_mm256_or_si256(m0, m1), m2);
-    unsigned int mask =
-        (unsigned int)_mm256_movemask_epi8(m) |
-        (unsigned int)_mm256_movemask_epi8(v);
+    unsigned int mask = (unsigned int)_mm256_movemask_epi8(m) |
+                        (unsigned int)_mm256_movemask_epi8(v);
     if (mask) {
       return i + (size_t)__builtin_ctz(mask);
     }
@@ -274,8 +271,7 @@ static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
     __m128i m2 = _mm_cmpeq_epi8(v, quest);
     __m128i m = _mm_or_si128(_mm_or_si128(m0, m1), m2);
     unsigned int mask =
-        (unsigned int)_mm_movemask_epi8(m) |
-        (unsigned int)_mm_movemask_epi8(v);
+        (unsigned int)_mm_movemask_epi8(m) | (unsigned int)_mm_movemask_epi8(v);
     if (mask) {
       return i + (size_t)__builtin_ctz(mask);
     }
@@ -295,8 +291,7 @@ static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
 /**
  * @brief Appends a string slice to the sentence list.
  */
-static void add_sentence(SentenceList *list, const char *start,
-                         size_t length) {
+static void add_sentence(SentenceList *list, const char *start, size_t length) {
   if (length == 0)
     return;
   // Grow capacity if needed
@@ -365,8 +360,7 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
       if (byte0 < 0x80) {
         const char *term_end = cursor + 1;
         if (byte0 == '.' || byte0 == '!' || byte0 == '?') {
-          while (term_end < end &&
-                 (unsigned char)term_end[0] == byte0) {
+          while (term_end < end && (unsigned char)term_end[0] == byte0) {
             term_end++;
           }
         }
@@ -396,8 +390,7 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
     }
 
     // Fast-path common CJK terminators: 。, ？, ！
-    if (byte0 == 0xE3 && cursor + 2 < end &&
-        (unsigned char)cursor[1] == 0x80 &&
+    if (byte0 == 0xE3 && cursor + 2 < end && (unsigned char)cursor[1] == 0x80 &&
         (unsigned char)cursor[2] == 0x82) {
       bytes_read = 3;
       split_here = true;

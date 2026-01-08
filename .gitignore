@@ -8,3 +8,5 @@ corpus_dedup_optimized
 
 *.profraw
 *.profdata
+
+wavesort.o
