@@ -11,8 +11,17 @@ typedef struct Arena {
   struct Arena *next; // Linked list of arena blocks
 } Arena;
 
+/**
+ * Allocate a new arena chain with cap bytes in the first block.
+ */
 [[nodiscard]] Arena *arena_create(size_t cap);
+/**
+ * Allocate size bytes from the arena chain, growing as needed.
+ */
 void *arena_alloc(Arena *a, size_t size);
+/**
+ * Release all arena blocks and their contents.
+ */
 void arena_destroy(Arena *a);
 
 #endif

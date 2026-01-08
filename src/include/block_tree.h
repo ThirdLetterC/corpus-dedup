@@ -24,16 +24,34 @@ struct BlockNode {
   bool is_marked;    // true = content node, false = pointer node
 };
 
+/**
+ * Allocate a new tree node in the arena with the provided metadata.
+ */
 [[nodiscard]] BlockNode *create_node(struct Arena *arena, size_t start,
                                      size_t len, int level, BlockNode *parent);
+/**
+ * Compute rolling hashes for candidate nodes in parallel.
+ */
 void compute_hashes_parallel(BlockNode **candidates, size_t count,
                              const uint32_t *text, size_t len);
+/**
+ * Remove duplicate nodes at the current level and collect marked nodes.
+ */
 void deduplicate_level(BlockNode **candidates, size_t count,
                        const uint32_t *text, BlockNode **next_marked,
                        size_t next_cap, size_t *out_marked_count);
+/**
+ * Build the full block tree for the provided text.
+ */
 [[nodiscard]] BlockNode *build_block_tree(const uint32_t *text, size_t len,
                                           int s, int tau, struct Arena *arena);
+/**
+ * Print the tree structure for debugging.
+ */
 void print_tree(const BlockNode *node, int depth);
+/**
+ * Access the i-th symbol in the logical text represented by the tree.
+ */
 uint32_t query_access(const BlockNode *node, size_t i, const uint32_t *text);
 
 #endif
