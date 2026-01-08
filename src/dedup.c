@@ -282,9 +282,9 @@ static bool split_text_to_lines(const char8_t *text, size_t len,
 static bool emit_unit(const char8_t *data, size_t len, SentenceSet *seen,
                       SentenceSet *local_seen, char8_t *norm_buf,
                       size_t norm_cap, char8_t *out_buf, size_t *out_pos,
-                      size_t out_cap, size_t *out_unique, size_t *out_duplicates,
-                      FILE *duplicates_fp, mtx_t *duplicates_lock,
-                      size_t max_compare_len) {
+                      size_t out_cap, size_t *out_unique,
+                      size_t *out_duplicates, FILE *duplicates_fp,
+                      mtx_t *duplicates_lock, size_t max_compare_len) {
   size_t norm_len = normalize_sentence(data, len, norm_buf, norm_cap);
   if (max_compare_len != 0 && norm_len > max_compare_len) {
     norm_len = max_compare_len;
@@ -378,11 +378,10 @@ static bool deduplicate_spans(const char8_t *input, size_t input_len,
   for (size_t i = 0; i < span_count; ++i) {
     const char8_t *segment = spans[i].start;
     size_t segment_len = spans[i].len;
-    if (!emit_unit(segment, segment_len, seen, local_seen,
-                   scratch->norm_buffer, scratch->norm_cap,
-                   scratch->dedup_buffer, &out_pos, scratch->dedup_cap,
-                   out_unique, out_duplicates, duplicates_fp, duplicates_lock,
-                   max_compare_len)) {
+    if (!emit_unit(segment, segment_len, seen, local_seen, scratch->norm_buffer,
+                   scratch->norm_cap, scratch->dedup_buffer, &out_pos,
+                   scratch->dedup_cap, out_unique, out_duplicates,
+                   duplicates_fp, duplicates_lock, max_compare_len)) {
       return false;
     }
   }
@@ -436,17 +435,16 @@ static bool deduplicate_lines(const char8_t *input, size_t len,
                               DedupScratch *scratch, char8_t **out,
                               size_t *out_len, size_t *out_unique,
                               size_t *out_duplicates, FILE *duplicates_fp,
-                              mtx_t *duplicates_lock,
-                              size_t max_compare_len) {
+                              mtx_t *duplicates_lock, size_t max_compare_len) {
   SpanList lines = {0};
   if (!split_text_to_lines(input, len, &lines)) {
     return false;
   }
 
-  bool ok = deduplicate_spans(input, len, lines.items, lines.count, local_seen,
-                              seen, scratch, max_compare_len, out, out_len,
-                              out_unique, out_duplicates, duplicates_fp,
-                              duplicates_lock);
+  bool ok =
+      deduplicate_spans(input, len, lines.items, lines.count, local_seen, seen,
+                        scratch, max_compare_len, out, out_len, out_unique,
+                        out_duplicates, duplicates_fp, duplicates_lock);
   free_span_list(&lines);
   return ok;
 }
@@ -469,30 +467,27 @@ static bool deduplicate_with_mode(DedupMode mode, const char8_t *input,
                                   size_t len, size_t max_compare_len,
                                   SentenceSet *local_seen, SentenceSet *seen,
                                   DedupScratch *scratch, char8_t **out,
-                                  size_t *out_len,
-                                  size_t *out_unique, size_t *out_duplicates,
-                                  FILE *duplicates_fp, mtx_t *duplicates_lock) {
+                                  size_t *out_len, size_t *out_unique,
+                                  size_t *out_duplicates, FILE *duplicates_fp,
+                                  mtx_t *duplicates_lock) {
   switch (mode) {
   case DEDUP_MODE_DOCUMENT:
-    return deduplicate_document(input, len, local_seen, seen, scratch, out,
-                                out_len, out_unique, out_duplicates,
-                                duplicates_fp, duplicates_lock,
-                                max_compare_len);
+    return deduplicate_document(
+        input, len, local_seen, seen, scratch, out, out_len, out_unique,
+        out_duplicates, duplicates_fp, duplicates_lock, max_compare_len);
   case DEDUP_MODE_LINE:
     return deduplicate_lines(input, len, local_seen, seen, scratch, out,
-                             out_len, out_unique, out_duplicates,
-                             duplicates_fp, duplicates_lock, max_compare_len);
+                             out_len, out_unique, out_duplicates, duplicates_fp,
+                             duplicates_lock, max_compare_len);
   case DEDUP_MODE_PARAGRAPH:
-    return deduplicate_paragraphs(input, len, local_seen, seen, scratch, out,
-                                  out_len, out_unique, out_duplicates,
-                                  duplicates_fp, duplicates_lock,
-                                  max_compare_len);
+    return deduplicate_paragraphs(
+        input, len, local_seen, seen, scratch, out, out_len, out_unique,
+        out_duplicates, duplicates_fp, duplicates_lock, max_compare_len);
   case DEDUP_MODE_SENTENCE:
   default:
-    return deduplicate_sentences(input, len, local_seen, seen, scratch, out,
-                                 out_len, out_unique, out_duplicates,
-                                 duplicates_fp, duplicates_lock,
-                                 max_compare_len);
+    return deduplicate_sentences(
+        input, len, local_seen, seen, scratch, out, out_len, out_unique,
+        out_duplicates, duplicates_fp, duplicates_lock, max_compare_len);
   }
 }
 
@@ -640,12 +635,11 @@ static int batch_worker(void *arg) {
     size_t file_unique = 0;
     size_t file_duplicates = 0;
 
-    if (!deduplicate_with_mode(ctx->dedup_mode, item->raw_text, item->byte_len,
-                               ctx->max_compare_len,
-                               local_seen_init ? &local_seen : nullptr,
-                               ctx->seen, &scratch, &deduped, &deduped_len,
-                               &file_unique, &file_duplicates,
-                               ctx->duplicates_fp, ctx->duplicates_lock)) {
+    if (!deduplicate_with_mode(
+            ctx->dedup_mode, item->raw_text, item->byte_len,
+            ctx->max_compare_len, local_seen_init ? &local_seen : nullptr,
+            ctx->seen, &scratch, &deduped, &deduped_len, &file_unique,
+            &file_duplicates, ctx->duplicates_fp, ctx->duplicates_lock)) {
       fprintf(stderr, "Failed to deduplicate content for: %s\n", item->name);
       atomic_fetch_add_explicit(&ctx->stats->errors, 1, memory_order_relaxed);
       free(item->raw_text);
@@ -838,15 +832,15 @@ int run_dedup(const char *prog, int argc, char **argv) {
     }
     if (strcmp(arg, "--dedup-mode") == 0) {
       if (i + 1 >= argc) {
-        fprintf(
-            stderr,
-            "--dedup-mode requires one of: sentence, line, paragraph, document\n");
+        fprintf(stderr, "--dedup-mode requires one of: sentence, line, "
+                        "paragraph, document\n");
         return 1;
       }
       const char *mode_arg = argv[++i];
       if (!parse_dedup_mode(mode_arg, &dedup_mode)) {
-        fprintf(stderr, "Invalid --dedup-mode value: %s (expected sentence, "
-                        "line, paragraph, or document)\n",
+        fprintf(stderr,
+                "Invalid --dedup-mode value: %s (expected sentence, "
+                "line, paragraph, or document)\n",
                 mode_arg);
         return 1;
       }
@@ -879,12 +873,12 @@ int run_dedup(const char *prog, int argc, char **argv) {
     }
     fprintf(stderr, "Unexpected argument: %s\n", arg);
     printf("Usage:\n"
-             "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
-             "<sentence|line|paragraph|document>] "
-             "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-             "  --max-length defaults to %zu symbols (0 disables the limit)\n"
-             "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
-             "RADIX_SORT_USE_ASM=%d\n",
+           "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
+           "<sentence|line|paragraph|document>] "
+           "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
+           "  --max-length defaults to %zu symbols (0 disables the limit)\n"
+           "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
+           "RADIX_SORT_USE_ASM=%d\n",
            prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
            HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
     return 1;

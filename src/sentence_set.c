@@ -127,8 +127,7 @@ static char8_t *sentence_set_copy_data(SentenceSetShard *shard,
   size_t alloc_size = 0;
   if (ckd_add(&alloc_size, len, (size_t)1))
     return nullptr;
-  char8_t *copy =
-      (char8_t *)sentence_arena_alloc(&shard->arena, alloc_size);
+  char8_t *copy = (char8_t *)sentence_arena_alloc(&shard->arena, alloc_size);
   if (!copy)
     return nullptr;
   if (len > 0)
@@ -255,9 +254,9 @@ static bool sentence_set_rehash_shard(SentenceSetShard *shard,
                                       size_t new_bucket_count) {
   if (!shard)
     return false;
-  size_t size = round_up_pow2(new_bucket_count < MIN_BUCKET_COUNT
-                                  ? MIN_BUCKET_COUNT
-                                  : new_bucket_count);
+  size_t size =
+      round_up_pow2(new_bucket_count < MIN_BUCKET_COUNT ? MIN_BUCKET_COUNT
+                                                        : new_bucket_count);
   size_t alloc_hashes = 0;
   size_t alloc_lengths = 0;
   size_t alloc_data = 0;
@@ -311,9 +310,10 @@ static bool sentence_set_rehash_shard(SentenceSetShard *shard,
   return true;
 }
 
-[[nodiscard]] static bool sentence_set_insert_internal(
-    SentenceSetShard *shard, uint64_t hash, const char8_t *data, size_t len,
-    bool data_owned, bool *inserted) {
+[[nodiscard]] static bool
+sentence_set_insert_internal(SentenceSetShard *shard, uint64_t hash,
+                             const char8_t *data, size_t len, bool data_owned,
+                             bool *inserted) {
   if (!shard || !data || !inserted)
     return false;
 
@@ -328,9 +328,9 @@ static bool sentence_set_rehash_shard(SentenceSetShard *shard,
   while (true) {
     uint8_t ctrl = shard->ctrl[idx];
     if (ctrl == CTRL_EMPTY) {
-      char8_t *stored = cand_owned ? (char8_t *)cand_data
-                                   : sentence_set_copy_data(shard, cand_data,
-                                                            cand_len);
+      char8_t *stored =
+          cand_owned ? (char8_t *)cand_data
+                     : sentence_set_copy_data(shard, cand_data, cand_len);
       if (!stored)
         return false;
       shard->hashes[idx] = cand_hash;
@@ -354,9 +354,9 @@ static bool sentence_set_rehash_shard(SentenceSetShard *shard,
       char8_t *displaced_data = shard->data[idx];
       uint8_t displaced_ctrl = ctrl;
 
-      char8_t *stored = cand_owned ? (char8_t *)cand_data
-                                   : sentence_set_copy_data(shard, cand_data,
-                                                            cand_len);
+      char8_t *stored =
+          cand_owned ? (char8_t *)cand_data
+                     : sentence_set_copy_data(shard, cand_data, cand_len);
       if (!stored)
         return false;
       shard->hashes[idx] = cand_hash;

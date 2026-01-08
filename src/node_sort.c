@@ -4,8 +4,8 @@
 #include <string.h>
 #include <threads.h>
 
-#include "ckdint_compat.h"
 #include "block_tree_asm_defs.h"
+#include "ckdint_compat.h"
 #include "config.h"
 
 #ifndef WAVESORT_USE_ASM
@@ -132,21 +132,21 @@ static bool ensure_radix_workspace(size_t count) {
   if (ckd_mul(&alloc_nodes, count, sizeof(BlockNode *)))
     return false;
 
-  uint64_t *len_keys =
-      g_radix_ws.len_keys ? realloc(g_radix_ws.len_keys, alloc_u64)
-                          : malloc(alloc_u64);
-  uint64_t *hash_keys =
-      g_radix_ws.hash_keys ? realloc(g_radix_ws.hash_keys, alloc_u64)
+  uint64_t *len_keys = g_radix_ws.len_keys
+                           ? realloc(g_radix_ws.len_keys, alloc_u64)
                            : malloc(alloc_u64);
-  uint64_t *len_tmp =
-      g_radix_ws.len_tmp ? realloc(g_radix_ws.len_tmp, alloc_u64)
-                         : malloc(alloc_u64);
-  uint64_t *hash_tmp =
-      g_radix_ws.hash_tmp ? realloc(g_radix_ws.hash_tmp, alloc_u64)
+  uint64_t *hash_keys = g_radix_ws.hash_keys
+                            ? realloc(g_radix_ws.hash_keys, alloc_u64)
+                            : malloc(alloc_u64);
+  uint64_t *len_tmp = g_radix_ws.len_tmp
+                          ? realloc(g_radix_ws.len_tmp, alloc_u64)
                           : malloc(alloc_u64);
-  BlockNode **nodes_tmp =
-      g_radix_ws.nodes_tmp ? realloc(g_radix_ws.nodes_tmp, alloc_nodes)
-                           : malloc(alloc_nodes);
+  uint64_t *hash_tmp = g_radix_ws.hash_tmp
+                           ? realloc(g_radix_ws.hash_tmp, alloc_u64)
+                           : malloc(alloc_u64);
+  BlockNode **nodes_tmp = g_radix_ws.nodes_tmp
+                              ? realloc(g_radix_ws.nodes_tmp, alloc_nodes)
+                              : malloc(alloc_nodes);
 
   if (!len_keys || !hash_keys || !len_tmp || !hash_tmp || !nodes_tmp) {
     return false;

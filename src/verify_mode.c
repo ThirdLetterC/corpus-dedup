@@ -254,8 +254,8 @@ static bool verify_spans(DedupMode mode, const char8_t *input, size_t input_len,
   const char *unit_label = dedup_unit_singular(mode);
 
   for (size_t i = 0; i < span_count; ++i) {
-    size_t norm_len = normalize_sentence(spans[i].start, spans[i].len, norm_buf,
-                                         norm_cap);
+    size_t norm_len =
+        normalize_sentence(spans[i].start, spans[i].len, norm_buf, norm_cap);
     if (max_compare_len != 0 && norm_len > max_compare_len) {
       norm_len = max_compare_len;
     }
@@ -317,17 +317,16 @@ static bool verify_lines(const char8_t *input, size_t len, SentenceSet *seen,
     return false;
   }
 
-  bool ok = verify_spans(DEDUP_MODE_LINE, input, len, lines.items, lines.count,
-                         max_compare_len, seen, out_units, out_duplicates,
-                         label);
+  bool ok =
+      verify_spans(DEDUP_MODE_LINE, input, len, lines.items, lines.count,
+                   max_compare_len, seen, out_units, out_duplicates, label);
   free_span_list(&lines);
   return ok;
 }
 
-static bool verify_document(const char8_t *input, size_t len,
-                            SentenceSet *seen, size_t *out_units,
-                            size_t *out_duplicates, const char *label,
-                            size_t max_compare_len) {
+static bool verify_document(const char8_t *input, size_t len, SentenceSet *seen,
+                            size_t *out_units, size_t *out_duplicates,
+                            const char *label, size_t max_compare_len) {
   SentenceSpan single = {.start = input, .len = len};
   size_t span_count = input && len > 0 ? 1 : 0;
   return verify_spans(DEDUP_MODE_DOCUMENT, input, len, &single, span_count,
@@ -346,8 +345,8 @@ static bool verify_with_mode(DedupMode mode, const char8_t *input, size_t len,
     return verify_lines(input, len, seen, out_units, out_duplicates, label,
                         max_compare_len);
   case DEDUP_MODE_PARAGRAPH:
-    return verify_paragraphs(input, len, seen, out_units, out_duplicates,
-                             label, max_compare_len);
+    return verify_paragraphs(input, len, seen, out_units, out_duplicates, label,
+                             max_compare_len);
   case DEDUP_MODE_SENTENCE:
   default:
     return verify_sentences(input, len, seen, out_units, out_duplicates, label,
@@ -405,8 +404,9 @@ int run_verify(const char *prog, int argc, char **argv) {
       }
       const char *mode_arg = argv[++i];
       if (!parse_dedup_mode(mode_arg, &dedup_mode)) {
-        fprintf(stderr, "Invalid --dedup-mode value: %s (expected sentence, "
-                        "line, paragraph, or document)\n",
+        fprintf(stderr,
+                "Invalid --dedup-mode value: %s (expected sentence, "
+                "line, paragraph, or document)\n",
                 mode_arg);
         return 1;
       }
