@@ -43,15 +43,16 @@ make release
 Options:
 
 - `-DUSE_ASM=ON|OFF` (default ON) — enable NASM fast paths.
-- `-DHASH_UNROLL=8` (default 8) — unroll factor for `hash_worker.asm` (4 or 8).
+- `-DHASH_UNROLL=8` (default 8) — unroll factor for `asm/hash_worker.asm` (4 or
+  8).
 - `-DHASH_PREFETCH_DISTANCE=256` — prefetch distance (bytes) for asm hash
   worker.
 
-When `USE_ASM=ON`, the following asm sources are built: `wavesort.asm`,
-`hash_worker.asm`, `radix_histogram_length.asm`, `radix_scatter_length.asm`,
-`radix_histogram_block_id.asm`, `radix_scatter_block_id.asm`. With `USE_ASM=OFF`
-the pure C fallbacks are used (`WAVESORT_USE_ASM=0`, `HASH_WORKER_USE_ASM=0`,
-`RADIX_SORT_USE_ASM=0`).
+When `USE_ASM=ON`, the following asm sources are built: `asm/wavesort.asm`,
+`asm/hash_worker.asm`, `asm/radix_histogram_length.asm`,
+`asm/radix_scatter_length.asm`, `asm/radix_histogram_block_id.asm`,
+`asm/radix_scatter_block_id.asm`. With `USE_ASM=OFF` the pure C fallbacks are
+used (`WAVESORT_USE_ASM=0`, `HASH_WORKER_USE_ASM=0`, `RADIX_SORT_USE_ASM=0`).
 
 Runtime tuning:
 

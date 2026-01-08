@@ -40,7 +40,7 @@ static inline int32_t wavesort_block_id_key(uint64_t block_id) {
   return (int32_t)((uint32_t)block_id ^ 0x80000000u);
 }
 
-// Optional ASM wave_sort from wavesort.asm; weak to keep builds working.
+// Optional ASM wave_sort from asm/wavesort.asm; weak to keep builds working.
 extern void wave_sort(int32_t *arr, size_t n) __attribute__((weak));
 #endif
 
