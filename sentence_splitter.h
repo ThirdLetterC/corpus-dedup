@@ -2,21 +2,7 @@
 #define SENTENCE_SPLITTER_H
 
 #include <stddef.h>
-#include <uchar.h>
-
-#if defined(__clang__)
-#if __has_feature(c_char8_t)
-#define SENTENCE_SPLITTER_HAVE_CHAR8_T 1
-#endif
-#elif defined(__GNUC__)
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
-#define SENTENCE_SPLITTER_HAVE_CHAR8_T 1
-#endif
-#endif
-
-#if !defined(SENTENCE_SPLITTER_HAVE_CHAR8_T)
-typedef unsigned char char8_t;
-#endif
+#include "utf8.h"
 
 /**
  * @brief Slice into the original UTF-8 buffer.

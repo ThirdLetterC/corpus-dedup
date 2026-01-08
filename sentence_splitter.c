@@ -190,55 +190,13 @@ static inline bool should_block_split_on_dot(const char8_t *sentence_start,
 
 static inline size_t decode_utf8(const char8_t *p, size_t len,
                                  char32_t *out_cp) {
-  if (len == 0)
+  uint32_t cp = 0;
+  bool invalid = false;
+  size_t consumed = utf8_decode_advance(p, len, &cp, &invalid);
+  if (consumed == 0 || invalid)
     return 0;
-  unsigned char c0 = p[0];
-  if (c0 < 0x80) {
-    *out_cp = (char32_t)c0;
-    return 1;
-  }
-  if ((c0 & 0xE0) == 0xC0) {
-    if (len < 2)
-      return 0;
-    unsigned char c1 = p[1];
-    if ((c1 & 0xC0) != 0x80)
-      return 0;
-    char32_t cp = (char32_t)(((c0 & 0x1F) << 6) | (c1 & 0x3F));
-    if (cp < 0x80)
-      return 0;
-    *out_cp = cp;
-    return 2;
-  }
-  if ((c0 & 0xF0) == 0xE0) {
-    if (len < 3)
-      return 0;
-    unsigned char c1 = p[1];
-    unsigned char c2 = p[2];
-    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80)
-      return 0;
-    char32_t cp =
-        (char32_t)(((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F));
-    if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
-      return 0;
-    *out_cp = cp;
-    return 3;
-  }
-  if ((c0 & 0xF8) == 0xF0) {
-    if (len < 4)
-      return 0;
-    unsigned char c1 = p[1];
-    unsigned char c2 = p[2];
-    unsigned char c3 = p[3];
-    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
-      return 0;
-    char32_t cp = (char32_t)(((c0 & 0x07) << 18) | ((c1 & 0x3F) << 12) |
-                             ((c2 & 0x3F) << 6) | (c3 & 0x3F));
-    if (cp < 0x10000 || cp > 0x10FFFF)
-      return 0;
-    *out_cp = cp;
-    return 4;
-  }
-  return 0;
+  *out_cp = (char32_t)cp;
+  return consumed;
 }
 
 static inline size_t find_next_event_ascii(const char8_t *p, size_t len) {

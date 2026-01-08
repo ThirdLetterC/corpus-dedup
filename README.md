@@ -27,48 +27,42 @@ Block Tree construction (per file):
 7. Stop when no new candidates exist; the result is a tree of content nodes plus
    pointer nodes that refer to duplicate blocks.
 
-## Build
+## Build (CMake)
 
-ASM build (x86_64, clang + nasm):
+Requirements: CMake ≥ 3.20, clang or gcc with C23 support, `nasm` for asm fast
+paths on x86_64.
 
-```sh
-# 1) Assemble wavesort.
-nasm -f elf64 -O3 wavesort.asm -o wavesort.o
-
-# 2) Compile the asm helpers (clang runs the preprocessor).
-clang -x assembler-with-cpp -c hash_worker.asm -o hash_worker.o
-clang -x assembler-with-cpp -c radix_histogram_length.asm -o radix_histogram_length.o
-clang -x assembler-with-cpp -c radix_scatter_length.asm -o radix_scatter_length.o
-clang -x assembler-with-cpp -c radix_histogram_block_id.asm -o radix_histogram_block_id.o
-clang -x assembler-with-cpp -c radix_scatter_block_id.asm -o radix_scatter_block_id.o
-
-# 3) Compile + link the C sources with the asm objects.
-clang -std=c2x -O3 -pthread block_tree.c sentence_splitter.c \
-  hash_worker.o radix_histogram_length.o radix_scatter_length.o \
-  radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o block_tree
-```
-
-Pure C build (no ASM):
+Configure and build:
 
 ```sh
-clang -std=c2x -O3 -pthread -DHASH_WORKER_USE_ASM=0 -DRADIX_SORT_USE_ASM=0 \
-  block_tree.c sentence_splitter.c -o block_tree
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release    # or Debug
+cmake --build build --config Release
 ```
 
-Optional tuning:
+Options:
 
-- `-DHASH_UNROLL=8` to use 8-way unrolling in the hash worker (default: 4).
-- `BLOCK_TREE_THREADS=8` to override auto-detected thread count at runtime.
-- When overriding `HASH_UNROLL` or `HASH_PREFETCH_DISTANCE`, pass the same `-D`
-  flags to the `clang -x assembler-with-cpp` steps.
+- `-DUSE_ASM=ON|OFF` (default ON) — enable NASM fast paths.
+- `-DHASH_UNROLL=8` (default 8) — unroll factor for `hash_worker.asm` (4 or 8).
+- `-DHASH_PREFETCH_DISTANCE=256` — prefetch distance (bytes) for asm hash
+  worker.
 
-Example:
+When `USE_ASM=ON`, the following asm sources are built: `wavesort.asm`,
+`hash_worker.asm`, `radix_histogram_length.asm`, `radix_scatter_length.asm`,
+`radix_histogram_block_id.asm`, `radix_scatter_block_id.asm`. With `USE_ASM=OFF`
+the pure C fallbacks are used (`WAVESORT_USE_ASM=0`, `HASH_WORKER_USE_ASM=0`,
+`RADIX_SORT_USE_ASM=0`).
 
-```sh
-clang -std=c2x -O3 -pthread -DHASH_UNROLL=8 -DHASH_WORKER_USE_ASM=0 \
-  -DRADIX_SORT_USE_ASM=0 block_tree.c sentence_splitter.c -o block_tree
-BLOCK_TREE_THREADS=8 ./block_tree data/dedup out
-```
+Runtime tuning:
+
+- `BLOCK_TREE_THREADS=8` overrides auto-detected thread count.
+- CLI modes:
+  - Dedup: `./corpus_dedup <input_dir> <output_dir> [mask] [--write-duplicates] [--build-block-tree]`
+  - Verify: `./corpus_dedup --verify <dedup_dir> [mask]`
+  - Search: `./corpus_dedup --search <input_dir> [mask] [--limit N]`
+
+The executable is named `corpus_dedup` in `build/` (or your chosen build
+directory). Adjust `--config Debug|Release` if you use multi-config generators
+like Ninja Multi-Config or Xcode.
 
 Optional flags:
 
