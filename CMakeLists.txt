@@ -18,28 +18,30 @@ set(HASH_UNROLL 8 CACHE STRING "Unroll factor for hash worker asm (4 or 8)")
 set(HASH_PREFETCH_DISTANCE 256 CACHE STRING "Prefetch distance in bytes for hash worker asm")
 
 set(SRC
-    main.c
-    block_tree_core.c
-    dedup.c
-    search_mode.c
-    verify_mode.c
-    config.c
-    arena.c
-    hash_pool.c
-    hash_utils.c
-    io_utils.c
-    node_sort.c
-    progress.c
-    sentence_set.c
-    sentence_splitter.c
-    text_utils.c
-    utf8.c
+    src/main.c
+    src/block_tree_core.c
+    src/dedup.c
+    src/search_mode.c
+    src/verify_mode.c
+    src/config.c
+    src/arena.c
+    src/hash_pool.c
+    src/hash_utils.c
+    src/io_utils.c
+    src/node_sort.c
+    src/progress.c
+    src/sentence_set.c
+    src/sentence_splitter.c
+    src/text_utils.c
+    src/utf8.c
 )
+
+set(PROJECT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
 
 add_executable(corpus_dedup ${SRC})
 target_compile_features(corpus_dedup PRIVATE c_std_23)
 set_target_properties(corpus_dedup PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED YES)
-target_include_directories(corpus_dedup PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(corpus_dedup PRIVATE ${PROJECT_INCLUDE_DIR})
 target_compile_options(corpus_dedup PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 find_package(Threads REQUIRED)
@@ -48,7 +50,7 @@ target_link_libraries(corpus_dedup PRIVATE Threads::Threads)
 if(USE_ASM)
   enable_language(ASM_NASM)
   set(ASM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/asm)
-  set(ASM_DEFS ${CMAKE_CURRENT_SOURCE_DIR}/include/block_tree_asm_defs.h)
+  set(ASM_DEFS ${PROJECT_INCLUDE_DIR}/block_tree_asm_defs.h)
   set(ASM_OUT
     ${CMAKE_CURRENT_BINARY_DIR}/hash_worker.o
     ${CMAKE_CURRENT_BINARY_DIR}/radix_histogram_length.o
@@ -63,7 +65,7 @@ if(USE_ASM)
     COMMAND ${CMAKE_C_COMPILER} -x assembler-with-cpp -c
             -DHASH_UNROLL=${HASH_UNROLL}
             -DHASH_PREFETCH_DISTANCE=${HASH_PREFETCH_DISTANCE}
-            -I${CMAKE_CURRENT_SOURCE_DIR}/include
+            -I${PROJECT_INCLUDE_DIR}
             ${ASM_DIR}/hash_worker.asm
             -o ${CMAKE_CURRENT_BINARY_DIR}/hash_worker.o
     DEPENDS ${ASM_DIR}/hash_worker.asm ${ASM_DEFS}
@@ -73,7 +75,7 @@ if(USE_ASM)
     add_custom_command(
       OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${f}.o
       COMMAND ${CMAKE_C_COMPILER} -x assembler-with-cpp -c
-              -I${CMAKE_CURRENT_SOURCE_DIR}/include
+              -I${PROJECT_INCLUDE_DIR}
               ${ASM_DIR}/${f}.asm
               -o ${CMAKE_CURRENT_BINARY_DIR}/${f}.o
       DEPENDS ${ASM_DIR}/${f}.asm ${ASM_DEFS}
