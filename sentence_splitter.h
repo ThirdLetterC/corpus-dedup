@@ -2,12 +2,27 @@
 #define SENTENCE_SPLITTER_H
 
 #include <stddef.h>
+#include <uchar.h>
+
+#if defined(__clang__)
+#if __has_feature(c_char8_t)
+#define SENTENCE_SPLITTER_HAVE_CHAR8_T 1
+#endif
+#elif defined(__GNUC__)
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define SENTENCE_SPLITTER_HAVE_CHAR8_T 1
+#endif
+#endif
+
+#if !defined(SENTENCE_SPLITTER_HAVE_CHAR8_T)
+typedef unsigned char char8_t;
+#endif
 
 /**
  * @brief Slice into the original UTF-8 buffer.
  */
 typedef struct {
-  const char *start;
+  const char8_t *start;
   size_t len;
 } SentenceSpan;
 
@@ -27,7 +42,7 @@ typedef struct {
  * @param len Byte length of the source string.
  * @return SentenceList Structure containing results. User must free.
  */
-SentenceList split_text_to_sentences(const char *restrict text, size_t len);
+SentenceList split_text_to_sentences(const char8_t *restrict text, size_t len);
 
 /**
  * @brief Frees all memory associated with the sentence list.

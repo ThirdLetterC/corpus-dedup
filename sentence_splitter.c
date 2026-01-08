@@ -65,10 +65,11 @@ static inline bool is_unicode_closer(char32_t cp) {
           cp == 0xFF09 || cp == 0xFF3D || cp == 0xFF5D);
 }
 
-static inline size_t decode_utf8(const unsigned char *p, size_t len,
+static inline size_t decode_utf8(const char8_t *p, size_t len,
                                  char32_t *out_cp);
 
-static inline const char *skip_white_space(const char *p, const char *end) {
+static inline const char8_t *skip_white_space(const char8_t *p,
+                                              const char8_t *end) {
   while (p < end) {
     unsigned char c = (unsigned char)p[0];
     if (c <= 0x20) {
@@ -104,8 +105,7 @@ static inline const char *skip_white_space(const char *p, const char *end) {
       }
     }
     char32_t cp;
-    size_t bytes =
-        decode_utf8((const unsigned char *)p, (size_t)(end - p), &cp);
+    size_t bytes = decode_utf8(p, (size_t)(end - p), &cp);
     if (bytes == 0)
       return p;
     if (is_basic_white_space(cp)) {
@@ -117,7 +117,8 @@ static inline const char *skip_white_space(const char *p, const char *end) {
   return p;
 }
 
-static inline const char *skip_closing_punct(const char *p, const char *end) {
+static inline const char8_t *skip_closing_punct(const char8_t *p,
+                                                const char8_t *end) {
   while (p < end) {
     unsigned char c = (unsigned char)p[0];
     if (c < 0x80) {
@@ -128,8 +129,7 @@ static inline const char *skip_closing_punct(const char *p, const char *end) {
       return p;
     }
     char32_t cp;
-    size_t bytes =
-        decode_utf8((const unsigned char *)p, (size_t)(end - p), &cp);
+    size_t bytes = decode_utf8(p, (size_t)(end - p), &cp);
     if (bytes == 0)
       return p;
     if (is_unicode_closer(cp)) {
@@ -141,7 +141,7 @@ static inline const char *skip_closing_punct(const char *p, const char *end) {
   return p;
 }
 
-static inline bool is_common_abbrev(const char *start, size_t len) {
+static inline bool is_common_abbrev(const char8_t *start, size_t len) {
   if (len == 2) {
     unsigned char c0 = ascii_tolower((unsigned char)start[0]);
     unsigned char c1 = ascii_tolower((unsigned char)start[1]);
@@ -164,14 +164,14 @@ static inline bool is_common_abbrev(const char *start, size_t len) {
   return false;
 }
 
-static inline bool should_block_split_on_dot(const char *sentence_start,
-                                             const char *dot_pos,
-                                             const char *next_non_space,
-                                             const char *end) {
+static inline bool should_block_split_on_dot(const char8_t *sentence_start,
+                                             const char8_t *dot_pos,
+                                             const char8_t *next_non_space,
+                                             const char8_t *end) {
   if (next_non_space >= end)
     return false;
   size_t len = 0;
-  const char *p = dot_pos;
+  const char8_t *p = dot_pos;
   while (p > sentence_start) {
     unsigned char c = (unsigned char)p[-1];
     if (!is_ascii_alpha(c))
@@ -188,7 +188,7 @@ static inline bool should_block_split_on_dot(const char *sentence_start,
   return is_common_abbrev(dot_pos - len, len);
 }
 
-static inline size_t decode_utf8(const unsigned char *p, size_t len,
+static inline size_t decode_utf8(const char8_t *p, size_t len,
                                  char32_t *out_cp) {
   if (len == 0)
     return 0;
@@ -241,7 +241,7 @@ static inline size_t decode_utf8(const unsigned char *p, size_t len,
   return 0;
 }
 
-static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
+static inline size_t find_next_event_ascii(const char8_t *p, size_t len) {
   size_t i = 0;
 #if defined(__AVX2__)
   const __m256i dot = _mm256_set1_epi8('.');
@@ -291,7 +291,8 @@ static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
 /**
  * @brief Appends a string slice to the sentence list.
  */
-static void add_sentence(SentenceList *list, const char *start, size_t length) {
+static void add_sentence(SentenceList *list, const char8_t *start,
+                         size_t length) {
   if (length == 0)
     return;
   // Grow capacity if needed
@@ -315,7 +316,7 @@ static void add_sentence(SentenceList *list, const char *start, size_t length) {
  * @param len Byte length of the source string.
  * @return SentenceList Structure containing results. User must free.
  */
-SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
+SentenceList split_text_to_sentences(const char8_t *restrict text, size_t len) {
   SentenceList list = {0};
   if (!text || len == 0)
     return list;
@@ -332,9 +333,9 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
     }
   }
 
-  const char *cursor = text;
-  const char *sentence_start = text;
-  const char *end = text + len;
+  const char8_t *cursor = text;
+  const char8_t *sentence_start = text;
+  const char8_t *end = text + len;
 
   char32_t current_cp;
 
@@ -349,8 +350,7 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
 
     if (byte0 < 0x80) {
       size_t remaining = (size_t)(end - cursor);
-      size_t offset =
-          find_next_event_ascii((const unsigned char *)cursor, remaining);
+      size_t offset = find_next_event_ascii(cursor, remaining);
       if (offset == remaining) {
         cursor = end;
         break;
@@ -358,14 +358,14 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
       cursor += offset;
       byte0 = (unsigned char)cursor[0];
       if (byte0 < 0x80) {
-        const char *term_end = cursor + 1;
+        const char8_t *term_end = cursor + 1;
         if (byte0 == '.' || byte0 == '!' || byte0 == '?') {
           while (term_end < end && (unsigned char)term_end[0] == byte0) {
             term_end++;
           }
         }
-        const char *after_closers = skip_closing_punct(term_end, end);
-        const char *ws = skip_white_space(after_closers, end);
+        const char8_t *after_closers = skip_closing_punct(term_end, end);
+        const char8_t *ws = skip_white_space(after_closers, end);
         if (after_closers >= end) {
           split_here = true;
         } else if (ws > after_closers) {
@@ -402,8 +402,7 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
       split_here = true;
     } else {
       // 1. Decode current character
-      bytes_read = decode_utf8((const unsigned char *)cursor,
-                               (size_t)(end - cursor), &current_cp);
+      bytes_read = decode_utf8(cursor, (size_t)(end - cursor), &current_cp);
 
       // Handle decoding errors or incomplete sequences
       if (bytes_read == 0) {
@@ -416,11 +415,11 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
       }
     }
 
-    const char *next_cursor = cursor + bytes_read;
+    const char8_t *next_cursor = cursor + bytes_read;
 
     // 3. Execute Split
     if (split_here) {
-      const char *after_closers = skip_closing_punct(next_cursor, end);
+      const char8_t *after_closers = skip_closing_punct(next_cursor, end);
       // Length includes the terminator (current byte sequence)
       size_t len = (size_t)(after_closers - sentence_start);
       add_sentence(&list, sentence_start, len);
@@ -462,12 +461,13 @@ int main(void) {
       "Hello World. This is a test... with numbers 3.14 included. "
       "Also some Japanese: これはテストです。Unicode is handled correctly!";
 
-  SentenceList results = split_text_to_sentences(article, strlen(article));
+  SentenceList results = split_text_to_sentences((const char8_t *)article,
+                                                 strlen(article));
 
   printf("Found %zu sentences:\n", results.count);
   for (size_t i = 0; i < results.count; i++) {
     printf("[%zu]: %.*s\n", i + 1, (int)results.sentences[i].len,
-           results.sentences[i].start);
+           (const char *)results.sentences[i].start);
   }
 
   free_sentence_list(&results);

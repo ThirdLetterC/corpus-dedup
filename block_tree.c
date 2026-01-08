@@ -49,20 +49,6 @@
 // 1. Constants & Configuration
 // ==========================================
 
-#if defined(__clang__)
-#if __has_feature(c_char8_t)
-#define BLOCK_TREE_HAVE_CHAR8_T 1
-#endif
-#elif defined(__GNUC__)
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
-#define BLOCK_TREE_HAVE_CHAR8_T 1
-#endif
-#endif
-
-#if !defined(BLOCK_TREE_HAVE_CHAR8_T)
-typedef unsigned char char8_t;
-#endif
-
 const uint64_t HASH_MOD =
     4294967296ULL; // 2^32 (Implicit wrap-around logic used)
 const uint64_t HASH_MULT = 31ULL;
@@ -1750,16 +1736,14 @@ deduplicate_sentences(const char8_t *input, size_t len, SentenceSet *seen,
   }
 
   size_t out_pos = 0;
-  const char *text = (const char *)input;
-
-  SentenceList sentences = split_text_to_sentences(text, len);
+  SentenceList sentences = split_text_to_sentences(input, len);
 
   for (size_t i = 0; i < sentences.count; ++i) {
-    const char *sentence = sentences.sentences[i].start;
+    const char8_t *sentence = sentences.sentences[i].start;
     size_t sentence_len = sentences.sentences[i].len;
-    if (!emit_sentence((const char8_t *)sentence, sentence_len, seen, norm_buf,
-                       len, buffer, &out_pos, out_cap, out_unique,
-                       out_duplicates, duplicates_fp)) {
+    if (!emit_sentence(sentence, sentence_len, seen, norm_buf, len, buffer,
+                       &out_pos, out_cap, out_unique, out_duplicates,
+                       duplicates_fp)) {
       free_sentence_list(&sentences);
       free(norm_buf);
       free(buffer);
