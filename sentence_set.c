@@ -1,7 +1,7 @@
 #include "sentence_set.h"
+#include "ckdint_compat.h"
 #include "config.h"
 #include "hash_utils.h"
-#include "ckdint_compat.h"
 
 #include <stdlib.h>
 #include <string.h>

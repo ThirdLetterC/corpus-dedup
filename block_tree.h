@@ -25,8 +25,8 @@ struct BlockNode {
   bool is_marked;    // true = content node, false = pointer node
 };
 
-BlockNode *create_node(struct Arena *arena, size_t start, size_t len,
-                       int level, BlockNode *parent);
+BlockNode *create_node(struct Arena *arena, size_t start, size_t len, int level,
+                       BlockNode *parent);
 void compute_hashes_parallel(BlockNode **candidates, size_t count,
                              const uint32_t *text, size_t len);
 void deduplicate_level(BlockNode **candidates, size_t count,

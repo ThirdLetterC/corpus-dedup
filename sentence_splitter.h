@@ -1,8 +1,8 @@
 #ifndef SENTENCE_SPLITTER_H
 #define SENTENCE_SPLITTER_H
 
-#include <stddef.h>
 #include "utf8.h"
+#include <stddef.h>
 
 /**
  * @brief Slice into the original UTF-8 buffer.

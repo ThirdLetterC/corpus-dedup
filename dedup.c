@@ -3,15 +3,15 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
 
-#include "ckdint_compat.h"
 #include "arena.h"
 #include "block_tree.h"
+#include "ckdint_compat.h"
 #include "config.h"
 #include "io_utils.h"
 #include "progress.h"

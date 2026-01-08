@@ -1,12 +1,12 @@
 #include "block_tree.h"
 
+#include "ckdint_compat.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
 #include <unistd.h>
-#include "ckdint_compat.h"
 
 #include "arena.h"
 #include "block_tree_asm_defs.h"

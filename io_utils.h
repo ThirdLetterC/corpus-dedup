@@ -1,9 +1,9 @@
 #ifndef IO_UTILS_H
 #define IO_UTILS_H
 
+#include "utf8.h"
 #include <stdbool.h>
 #include <stddef.h>
-#include "utf8.h"
 
 bool read_file_bytes(const char *path, char8_t **out, size_t *out_len);
 bool write_file_bytes(const char *path, const char8_t *data, size_t len);

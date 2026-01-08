@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,11 +11,10 @@
 #include <sys/stat.h>
 #include <threads.h>
 #include <unistd.h>
-#include <inttypes.h>
 
-#include "ckdint_compat.h"
 #include "arena.h"
 #include "block_tree.h"
+#include "ckdint_compat.h"
 #include "config.h"
 #include "hash_pool.h"
 #include "io_utils.h"
@@ -371,18 +371,17 @@ static size_t search_global_for_query(const BlockNode *root, SearchFile *files,
     }
     if (end > count)
       end = count;
-    workers[i] =
-        (SearchWorker){.root = root,
-                       .files = files,
-                       .start_idx = start,
-                       .end_idx = end,
-                       .text = text,
-                       .prefix = prefix,
-                       .pow = pow,
-                       .query = query,
-                       .query_len = query_len,
-                       .query_hash = query_hash,
-                       .print_lock = have_lock ? &print_lock : NULL};
+    workers[i] = (SearchWorker){.root = root,
+                                .files = files,
+                                .start_idx = start,
+                                .end_idx = end,
+                                .text = text,
+                                .prefix = prefix,
+                                .pow = pow,
+                                .query = query,
+                                .query_len = query_len,
+                                .query_hash = query_hash,
+                                .print_lock = have_lock ? &print_lock : NULL};
     if (thread_count == 1) {
       search_worker(&workers[i]);
     } else if (thrd_create(&threads[i], search_worker, &workers[i]) ==

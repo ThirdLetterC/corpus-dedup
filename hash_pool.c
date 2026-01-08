@@ -175,7 +175,8 @@ size_t hash_pool_capacity(const HashThreadPool *pool) {
 
 bool hash_pool_run(HashThreadPool *pool, const ThreadContext *contexts,
                    size_t active_count) {
-  if (!pool || !contexts || active_count == 0 || active_count > pool->thread_count)
+  if (!pool || !contexts || active_count == 0 ||
+      active_count > pool->thread_count)
     return false;
 
   mtx_lock(&pool->lock);
