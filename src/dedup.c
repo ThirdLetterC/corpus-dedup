@@ -793,7 +793,7 @@ static bool process_batch(FileItem *batch, size_t batch_count,
   return launched > 0;
 }
 
-int run_dedup(int argc, char **argv) {
+int run_dedup(const char *prog, int argc, char **argv) {
   double overall_start = now_seconds();
   const char *input_dir = nullptr;
   const char *output_dir = nullptr;
@@ -860,7 +860,7 @@ int run_dedup(int argc, char **argv) {
              "  --max-length defaults to %zu symbols (0 disables the limit)\n"
              "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
              "RADIX_SORT_USE_ASM=%d\n",
-             argv[0], DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
+             prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
              HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
       return 0;
     }
@@ -879,13 +879,13 @@ int run_dedup(int argc, char **argv) {
     }
     fprintf(stderr, "Unexpected argument: %s\n", arg);
     printf("Usage:\n"
-           "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
-           "<sentence|line|paragraph|document>] "
-           "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-           "  --max-length defaults to %zu symbols (0 disables the limit)\n"
-           "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
-           "RADIX_SORT_USE_ASM=%d\n",
-           argv[0], DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
+             "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
+             "<sentence|line|paragraph|document>] "
+             "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
+             "  --max-length defaults to %zu symbols (0 disables the limit)\n"
+             "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
+             "RADIX_SORT_USE_ASM=%d\n",
+           prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
            HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
     return 1;
   }
@@ -896,7 +896,7 @@ int run_dedup(int argc, char **argv) {
            "<sentence|line|paragraph|document>] "
            "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
            "  --max-length defaults to %zu symbols (0 disables the limit)\n",
-           argv[0], DEFAULT_MAX_COMPARE_LENGTH);
+           prog, DEFAULT_MAX_COMPARE_LENGTH);
     return 1;
   }
 

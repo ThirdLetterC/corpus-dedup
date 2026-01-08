@@ -6,6 +6,6 @@
 /**
  * Entry point for deduplication mode.
  */
-int run_dedup(int argc, char **argv);
+int run_dedup(const char *prog, int argc, char **argv);
 
 #endif
