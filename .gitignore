@@ -1,0 +1,10 @@
+data/
+bt
+corpus_dedup
+
+block_tree
+block_tree_pgo
+
+default_*
+*.profraw
+*.profdata
