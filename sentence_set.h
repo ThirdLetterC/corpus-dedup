@@ -1,7 +1,6 @@
 #ifndef SENTENCE_SET_H
 #define SENTENCE_SET_H
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

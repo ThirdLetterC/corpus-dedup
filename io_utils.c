@@ -42,7 +42,7 @@ bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
     fclose(fp);
     return false;
   }
-  char8_t *buffer = malloc(alloc_size);
+  char8_t *buffer = (char8_t *)calloc(alloc_size, sizeof(char8_t));
   if (!buffer) {
     fprintf(stderr, "Failed to allocate text buffer for: %s\n", path);
     fclose(fp);
@@ -90,14 +90,14 @@ bool write_file_bytes(const char *path, const char8_t *data, size_t len) {
 
 char *dup_string(const char *input) {
   if (!input)
-    return NULL;
-  size_t len = strlen(input);
+    return nullptr;
+  const size_t len = strlen(input);
   size_t alloc_size = 0;
   if (ckd_add(&alloc_size, len, (size_t)1))
-    return NULL;
-  char *out = malloc(alloc_size);
+    return nullptr;
+  auto out = (char *)calloc(alloc_size, sizeof(char));
   if (!out)
-    return NULL;
+    return nullptr;
   memcpy(out, input, len);
   out[len] = '\0';
   return out;
@@ -105,20 +105,20 @@ char *dup_string(const char *input) {
 
 char *join_path(const char *dir, const char *name) {
   if (!dir || !name)
-    return NULL;
-  size_t dir_len = strlen(dir);
-  size_t name_len = strlen(name);
-  bool needs_sep = (dir_len > 0 && dir[dir_len - 1] != '/');
+    return nullptr;
+  const size_t dir_len = strlen(dir);
+  const size_t name_len = strlen(name);
+  const bool needs_sep = (dir_len > 0 && dir[dir_len - 1] != '/');
   size_t total = 0;
   if (ckd_add(&total, dir_len, name_len))
-    return NULL;
+    return nullptr;
   if (needs_sep && ckd_add(&total, total, (size_t)1))
-    return NULL;
+    return nullptr;
   if (ckd_add(&total, total, (size_t)1))
-    return NULL;
-  char *path = malloc(total);
+    return nullptr;
+  auto path = (char *)calloc(total, sizeof(char));
   if (!path)
-    return NULL;
+    return nullptr;
 
   memcpy(path, dir, dir_len);
   size_t pos = dir_len;

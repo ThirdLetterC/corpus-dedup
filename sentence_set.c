@@ -36,7 +36,7 @@ static size_t round_up_pow2(size_t value) {
 static void sentence_arena_init(SentenceArena *arena, size_t block_size) {
   if (!arena)
     return;
-  arena->head = NULL;
+  arena->head = nullptr;
   arena->block_size = block_size ? block_size : 1024;
 }
 
@@ -50,26 +50,26 @@ static void sentence_arena_destroy(SentenceArena *arena) {
     free(block);
     block = next;
   }
-  arena->head = NULL;
+  arena->head = nullptr;
   arena->block_size = 0;
 }
 
 static void *sentence_arena_alloc(SentenceArena *arena, size_t size) {
   if (!arena || size == 0)
-    return NULL;
+    return nullptr;
   size_t aligned = (size + 7) & ~(size_t)7;
   SentenceArenaBlock *block = arena->head;
   if (!block || block->offset + aligned > block->cap) {
     size_t cap = arena->block_size;
     if (cap < aligned)
       cap = aligned;
-    SentenceArenaBlock *next = malloc(sizeof(*next));
+    auto next = (SentenceArenaBlock *)calloc(1, sizeof(SentenceArenaBlock));
     if (!next)
-      return NULL;
-    next->data = malloc(cap);
+      return nullptr;
+    next->data = (uint8_t *)calloc(cap, sizeof(uint8_t));
     if (!next->data) {
       free(next);
-      return NULL;
+      return nullptr;
     }
     next->cap = cap;
     next->offset = 0;
@@ -102,7 +102,7 @@ void sentence_set_destroy(SentenceSet *set) {
   if (!set)
     return;
   free(set->buckets);
-  set->buckets = NULL;
+  set->buckets = nullptr;
   set->bucket_count = 0;
   set->entry_count = 0;
   sentence_arena_destroy(&set->arena);

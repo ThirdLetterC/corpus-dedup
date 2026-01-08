@@ -2,7 +2,6 @@
 
 #include <dirent.h>
 #include <fnmatch.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +23,7 @@ static bool verify_deduped_lines(const char8_t *input, size_t len,
     return true;
 
   size_t norm_cap = len > 0 ? len : 1;
-  char8_t *norm_buf = malloc(norm_cap);
+  auto norm_buf = (char8_t *)calloc(norm_cap, sizeof(char8_t));
   if (!norm_buf)
     return false;
 
@@ -64,7 +63,7 @@ static bool verify_deduped_lines(const char8_t *input, size_t len,
 
 int run_verify(const char *prog, int argc, char **argv) {
   double start_time = now_seconds();
-  const char *input_dir = NULL;
+  const char *input_dir = nullptr;
   const char *mask = DEFAULT_MASK;
   bool mask_set = false;
 
@@ -128,7 +127,7 @@ int run_verify(const char *prog, int argc, char **argv) {
   }
 
   struct dirent *entry;
-  while ((entry = readdir(dir)) != NULL) {
+  while ((entry = readdir(dir)) != nullptr) {
     const char *name = entry->d_name;
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
       continue;
@@ -160,7 +159,7 @@ int run_verify(const char *prog, int argc, char **argv) {
     return 1;
   }
 
-  while ((entry = readdir(dir)) != NULL) {
+  while ((entry = readdir(dir)) != nullptr) {
     const char *name = entry->d_name;
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
       continue;
@@ -180,7 +179,7 @@ int run_verify(const char *prog, int argc, char **argv) {
       continue;
     }
 
-    char8_t *raw_text = NULL;
+    char8_t *raw_text = nullptr;
     size_t byte_len = 0;
     if (!read_file_bytes(input_path, &raw_text, &byte_len)) {
       errors++;

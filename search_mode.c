@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <inttypes.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +31,7 @@ static bool parse_size_arg(const char *value, size_t *out) {
   if (!value || !out)
     return false;
   errno = 0;
-  char *end = NULL;
+  char *end = nullptr;
   unsigned long long parsed = strtoull(value, &end, 10);
   if (errno != 0 || end == value || *end != '\0')
     return false;
@@ -105,16 +104,13 @@ static bool build_hash_tables(const uint32_t *text, size_t len,
                               uint64_t **out_prefix, uint64_t **out_pow) {
   if (!out_prefix || !out_pow)
     return false;
-  *out_prefix = NULL;
-  *out_pow = NULL;
+  *out_prefix = nullptr;
+  *out_pow = nullptr;
   size_t table_len = 0;
   if (ckd_add(&table_len, len, (size_t)1))
     return false;
-  size_t alloc_size = 0;
-  if (ckd_mul(&alloc_size, table_len, sizeof(uint64_t)))
-    return false;
-  uint64_t *prefix = malloc(alloc_size);
-  uint64_t *pow = malloc(alloc_size);
+  auto prefix = (uint64_t *)calloc(table_len, sizeof(uint64_t));
+  auto pow = (uint64_t *)calloc(table_len, sizeof(uint64_t));
   if (!prefix || !pow) {
     free(prefix);
     free(pow);
@@ -177,7 +173,7 @@ static bool index_search_file(SearchFile *file, const char *input_dir,
     return false;
   }
 
-  char8_t *raw_text = NULL;
+  char8_t *raw_text = nullptr;
   size_t byte_len = 0;
   if (!read_file_bytes(file->input_path, &raw_text, &byte_len)) {
     free_search_file(file);
@@ -186,7 +182,7 @@ static bool index_search_file(SearchFile *file, const char *input_dir,
   if (out_bytes)
     *out_bytes = byte_len;
 
-  uint32_t *decoded = NULL;
+  uint32_t *decoded = nullptr;
   size_t decoded_len = 0;
   size_t invalid = 0;
   if (!utf8_decode_buffer(raw_text, byte_len, &decoded, &decoded_len,
@@ -353,7 +349,7 @@ static size_t search_global_for_query(const BlockNode *root, SearchFile *files,
                            .query = query,
                            .query_len = query_len,
                            .query_hash = query_hash,
-                           .print_lock = have_lock ? &print_lock : NULL};
+                           .print_lock = have_lock ? &print_lock : nullptr};
     search_worker(&worker);
     if (out_files_with_hits)
       *out_files_with_hits = worker.files_with_hits;
@@ -371,17 +367,18 @@ static size_t search_global_for_query(const BlockNode *root, SearchFile *files,
     }
     if (end > count)
       end = count;
-    workers[i] = (SearchWorker){.root = root,
-                                .files = files,
-                                .start_idx = start,
-                                .end_idx = end,
-                                .text = text,
-                                .prefix = prefix,
-                                .pow = pow,
-                                .query = query,
-                                .query_len = query_len,
-                                .query_hash = query_hash,
-                                .print_lock = have_lock ? &print_lock : NULL};
+    workers[i] =
+        (SearchWorker){.root = root,
+                       .files = files,
+                       .start_idx = start,
+                       .end_idx = end,
+                       .text = text,
+                       .prefix = prefix,
+                       .pow = pow,
+                       .query = query,
+                       .query_len = query_len,
+                       .query_hash = query_hash,
+                       .print_lock = have_lock ? &print_lock : nullptr};
     if (thread_count == 1) {
       search_worker(&workers[i]);
     } else if (thrd_create(&threads[i], search_worker, &workers[i]) ==
@@ -395,7 +392,7 @@ static size_t search_global_for_query(const BlockNode *root, SearchFile *files,
   if (thread_count > 1) {
     for (size_t i = 0; i < thread_count; ++i) {
       if (created[i]) {
-        thrd_join(threads[i], NULL);
+        thrd_join(threads[i], nullptr);
       }
     }
   }
@@ -420,7 +417,7 @@ static size_t search_global_for_query(const BlockNode *root, SearchFile *files,
 
 int run_search(const char *prog, int argc, char **argv) {
   double start_time = now_seconds();
-  const char *input_dir = NULL;
+  const char *input_dir = nullptr;
   const char *mask = DEFAULT_MASK;
   bool mask_set = false;
   size_t file_limit = SIZE_MAX;
@@ -499,7 +496,7 @@ int run_search(const char *prog, int argc, char **argv) {
   }
 
   struct dirent *entry;
-  while ((entry = readdir(dir)) != NULL) {
+  while ((entry = readdir(dir)) != nullptr) {
     const char *name = entry->d_name;
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
       continue;
@@ -535,10 +532,10 @@ int run_search(const char *prog, int argc, char **argv) {
     printf("Indexing %zu file(s).\n", matched);
   }
 
-  SearchFile *files = NULL;
+  SearchFile *files = nullptr;
   size_t files_count = 0;
   size_t files_cap = 0;
-  uint32_t *global_text = NULL;
+  uint32_t *global_text = nullptr;
   size_t global_len = 0;
   size_t global_cap = 0;
   size_t processed = 0;
@@ -551,7 +548,7 @@ int run_search(const char *prog, int argc, char **argv) {
     return 1;
   }
 
-  while ((entry = readdir(dir)) != NULL) {
+  while ((entry = readdir(dir)) != nullptr) {
     const char *name = entry->d_name;
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
       continue;
@@ -607,8 +604,8 @@ int run_search(const char *prog, int argc, char **argv) {
     return 1;
   }
 
-  uint64_t *prefix = NULL;
-  uint64_t *pow = NULL;
+  uint64_t *prefix = nullptr;
+  uint64_t *pow = nullptr;
   if (!build_hash_tables(global_text, global_len, &prefix, &pow)) {
     fprintf(stderr, "Failed to build rolling hash tables.\n");
     free(global_text);
@@ -655,7 +652,7 @@ int run_search(const char *prog, int argc, char **argv) {
       break;
     }
 
-    uint32_t *query = NULL;
+    uint32_t *query = nullptr;
     size_t query_len = 0;
     size_t invalid = 0;
     if (!utf8_decode_buffer((const char8_t *)line, strlen(line), &query,

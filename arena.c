@@ -4,17 +4,15 @@
 #include <stdlib.h>
 
 [[nodiscard]] Arena *arena_create(size_t cap) {
-  Arena *a = malloc(sizeof(Arena));
+  auto a = (Arena *)calloc(1, sizeof(Arena));
   if (!a)
-    return NULL;
-  a->ptr = malloc(cap);
+    return nullptr;
+  a->ptr = (uint8_t *)calloc(cap, sizeof(uint8_t));
   if (!a->ptr) {
     free(a);
-    return NULL;
+    return nullptr;
   }
-  a->offset = 0;
   a->cap = cap;
-  a->next = NULL;
   return a;
 }
 
@@ -26,13 +24,13 @@ void *arena_alloc(Arena *a, size_t size) {
     size_t next_cap = a->cap;
     if (next_cap < aligned_size)
       next_cap = aligned_size;
-    Arena *old_block = malloc(sizeof(*old_block));
+    auto old_block = (Arena *)calloc(1, sizeof(Arena));
     if (!old_block) {
       fprintf(stderr, "Arena overflow! Increase ARENA_BLOCK_SIZE.\n");
       exit(EXIT_FAILURE);
     }
     *old_block = *a;
-    a->ptr = malloc(next_cap);
+    a->ptr = (uint8_t *)calloc(next_cap, sizeof(uint8_t));
     if (!a->ptr) {
       free(old_block);
       fprintf(stderr, "Arena overflow! Increase ARENA_BLOCK_SIZE.\n");

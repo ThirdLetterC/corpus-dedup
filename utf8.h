@@ -1,7 +1,6 @@
 #ifndef UTF8_UTIL_H
 #define UTF8_UTIL_H
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <uchar.h>

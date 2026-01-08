@@ -62,7 +62,7 @@ size_t utf8_decode_advance(const char8_t *bytes, size_t len,
                                       size_t *invalid_count) {
   if (!out || !out_len || !invalid_count)
     return false;
-  *out = NULL;
+  *out = nullptr;
   *out_len = 0;
   *invalid_count = 0;
 
@@ -71,7 +71,7 @@ size_t utf8_decode_advance(const char8_t *bytes, size_t len,
   if (len > SIZE_MAX / sizeof(uint32_t))
     return false;
 
-  uint32_t *buffer = malloc(len * sizeof(uint32_t));
+  auto buffer = (uint32_t *)calloc(len, sizeof(uint32_t));
   if (!buffer)
     return false;
 

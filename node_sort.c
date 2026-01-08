@@ -284,8 +284,8 @@ static void wavesort_block_nodes(BlockNode **items, BlockNode **tmp,
     bool *used = used_stack;
 
     if (count > WAVESORT_STACK_LIMIT) {
-      keys = malloc(count * sizeof(*keys));
-      used = malloc(count * sizeof(*used));
+      keys = (int32_t *)calloc(count, sizeof(*keys));
+      used = (bool *)calloc(count, sizeof(*used));
     }
 
     if (keys && used) {
@@ -356,17 +356,19 @@ static void wavesort_block_nodes(BlockNode **items, BlockNode **tmp,
 // Radix sort helpers
 // ==========================================
 
-static void radix_histogram_length_c(BlockNode **src, size_t count,
-                                     unsigned int shift, size_t *buckets) {
+[[maybe_unused]] static void radix_histogram_length_c(BlockNode **src,
+                                                      size_t count,
+                                                      unsigned int shift,
+                                                      size_t *buckets) {
   for (size_t i = 0; i < count; ++i) {
     size_t key = src[i]->length;
     buckets[(key >> shift) & 0xFF]++;
   }
 }
 
-static void radix_scatter_length_c(BlockNode **src, BlockNode **dst,
-                                   size_t count, unsigned int shift,
-                                   size_t *buckets) {
+[[maybe_unused]] static void
+radix_scatter_length_c(BlockNode **src, BlockNode **dst, size_t count,
+                       unsigned int shift, size_t *buckets) {
   for (size_t i = 0; i < count; ++i) {
     size_t key = src[i]->length;
     size_t idx = (key >> shift) & 0xFF;
@@ -374,17 +376,19 @@ static void radix_scatter_length_c(BlockNode **src, BlockNode **dst,
   }
 }
 
-static void radix_histogram_block_id_c(BlockNode **src, size_t count,
-                                       unsigned int shift, size_t *buckets) {
+[[maybe_unused]] static void radix_histogram_block_id_c(BlockNode **src,
+                                                        size_t count,
+                                                        unsigned int shift,
+                                                        size_t *buckets) {
   for (size_t i = 0; i < count; ++i) {
     uint64_t key = src[i]->block_id;
     buckets[(key >> shift) & 0xFF]++;
   }
 }
 
-static void radix_scatter_block_id_c(BlockNode **src, BlockNode **dst,
-                                     size_t count, unsigned int shift,
-                                     size_t *buckets) {
+[[maybe_unused]] static void
+radix_scatter_block_id_c(BlockNode **src, BlockNode **dst, size_t count,
+                         unsigned int shift, size_t *buckets) {
   for (size_t i = 0; i < count; ++i) {
     uint64_t key = src[i]->block_id;
     size_t idx = (key >> shift) & 0xFF;

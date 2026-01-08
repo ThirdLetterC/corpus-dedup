@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <inttypes.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,7 +70,7 @@ static bool deduplicate_sentences(const char8_t *input, size_t len,
                                   size_t *out_duplicates, FILE *duplicates_fp) {
   if (!out || !out_len || !out_unique || !out_duplicates || !seen)
     return false;
-  *out = NULL;
+  *out = nullptr;
   *out_len = 0;
   *out_unique = 0;
   *out_duplicates = 0;
@@ -85,10 +84,10 @@ static bool deduplicate_sentences(const char8_t *input, size_t len,
     return false;
   }
 
-  char8_t *buffer = malloc(out_cap);
+  auto buffer = (char8_t *)calloc(out_cap, sizeof(char8_t));
   if (!buffer)
     return false;
-  char8_t *norm_buf = malloc(len);
+  auto norm_buf = (char8_t *)calloc(len, sizeof(char8_t));
   if (!norm_buf) {
     free(buffer);
     return false;
@@ -126,7 +125,7 @@ static bool deduplicate_sentences(const char8_t *input, size_t len,
 
 static bool process_text(const char *label, const char8_t *raw_text,
                          size_t byte_len, bool verify_tree) {
-  uint32_t *text = NULL;
+  uint32_t *text = nullptr;
   size_t len = 0;
   size_t invalid = 0;
   if (!utf8_decode_buffer(raw_text, byte_len, &text, &len, &invalid)) {
@@ -185,7 +184,7 @@ static bool process_batch(FileItem *batch, size_t batch_count,
     return true;
 
   for (size_t i = 0; i < batch_count; ++i) {
-    batch[i].raw_text = NULL;
+    batch[i].raw_text = nullptr;
     batch[i].byte_len = 0;
     if (!read_file_bytes(batch[i].input_path, &batch[i].raw_text,
                          &batch[i].byte_len)) {
@@ -206,7 +205,7 @@ static bool process_batch(FileItem *batch, size_t batch_count,
       continue;
     }
 
-    char8_t *deduped = NULL;
+    char8_t *deduped = nullptr;
     size_t deduped_len = 0;
     size_t file_unique = 0;
     size_t file_duplicates = 0;
@@ -288,8 +287,8 @@ static bool process_batch(FileItem *batch, size_t batch_count,
 
 int run_dedup(int argc, char **argv) {
   double overall_start = now_seconds();
-  const char *input_dir = NULL;
-  const char *output_dir = NULL;
+  const char *input_dir = nullptr;
+  const char *output_dir = nullptr;
   const char *mask = DEFAULT_MASK;
   bool mask_set = false;
   bool write_duplicates = false;
@@ -367,10 +366,10 @@ int run_dedup(int argc, char **argv) {
   size_t duplicate_sentences = 0;
   size_t errors = 0;
   bool abort_scan = false;
-  FILE *duplicates_fp = NULL;
-  char *duplicates_path = NULL;
+  FILE *duplicates_fp = nullptr;
+  char *duplicates_path = nullptr;
 
-  FileItem *items = NULL;
+  FileItem *items = nullptr;
   size_t items_count = 0;
   size_t items_cap = 0;
 
@@ -400,7 +399,7 @@ int run_dedup(int argc, char **argv) {
   }
 
   struct dirent *entry;
-  while ((entry = readdir(dir)) != NULL) {
+  while ((entry = readdir(dir)) != nullptr) {
     const char *name = entry->d_name;
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
       continue;
@@ -458,7 +457,7 @@ int run_dedup(int argc, char **argv) {
 
     items[items_count++] = (FileItem){.name = name_copy,
                                       .input_path = input_path,
-                                      .raw_text = NULL,
+                                      .raw_text = nullptr,
                                       .byte_len = 0};
     matched++;
   }
@@ -483,8 +482,8 @@ int run_dedup(int argc, char **argv) {
 
         for (size_t j = 0; j < batch_count; ++j) {
           batch[j] = items[i + j];
-          items[i + j].name = NULL;
-          items[i + j].input_path = NULL;
+          items[i + j].name = nullptr;
+          items[i + j].input_path = nullptr;
         }
 
         if (!process_batch(batch, batch_count, output_dir, &seen, duplicates_fp,

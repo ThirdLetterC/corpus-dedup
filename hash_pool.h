@@ -1,7 +1,6 @@
 #ifndef HASH_POOL_H
 #define HASH_POOL_H
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -19,9 +18,9 @@ typedef struct HashThreadPool HashThreadPool;
 
 /**
  * Acquire (or reuse) a thread pool sized for thread_count workers.
- * Returns NULL when thread_count <= 1 or allocation fails.
+ * Returns nullptr when thread_count <= 1 or allocation fails.
  */
-HashThreadPool *hash_pool_get(size_t thread_count);
+[[nodiscard]] HashThreadPool *hash_pool_get(size_t thread_count);
 
 size_t hash_pool_capacity(const HashThreadPool *pool);
 

@@ -27,7 +27,7 @@ static size_t parse_thread_env(void) {
   const char *env = getenv("BLOCK_TREE_THREADS");
   if (!env || !*env)
     return 0;
-  char *end = NULL;
+  char *end = nullptr;
   long val = strtol(env, &end, 10);
   if (end == env || val <= 0 || val > 1024)
     return 0;
@@ -168,7 +168,7 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
     active = count;
   size_t chunk_size = (count + active - 1) / active;
 
-  ThreadContext *ctxs = malloc(active * sizeof(*ctxs));
+  auto ctxs = (ThreadContext *)calloc(active, sizeof(ThreadContext));
   if (!ctxs) {
     ThreadContext ctx = {.nodes = candidates,
                          .start_idx = 0,
@@ -299,7 +299,7 @@ BlockNode *create_node(Arena *arena, size_t start, size_t len, int level,
   n->parent = parent;
   n->is_marked = false;
   n->target_pos = 0;
-  n->children = NULL;
+  n->children = nullptr;
   n->child_count = 0;
   n->block_id = 0;
   return n;
@@ -308,16 +308,16 @@ BlockNode *create_node(Arena *arena, size_t start, size_t len, int level,
 BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
                             Arena *arena) {
   if (!arena)
-    return NULL;
+    return nullptr;
 
-  BlockNode *root = create_node(arena, 0, len, 0, NULL);
+  BlockNode *root = create_node(arena, 0, len, 0, nullptr);
   root->is_marked = true;
 
-  BlockNode **current_marked = malloc(sizeof(*current_marked));
+  auto current_marked = (BlockNode **)calloc(1, sizeof(BlockNode *));
   if (!current_marked)
-    return NULL;
-  BlockNode **next_marked = NULL;
-  BlockNode **candidates = NULL;
+    return nullptr;
+  BlockNode **next_marked = nullptr;
+  BlockNode **candidates = nullptr;
   size_t current_cap = 1;
   size_t next_cap = 0;
   size_t cand_cap = 0;
@@ -352,7 +352,14 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
       size_t num_children =
           (step == 1) ? (max_len < divisor ? max_len : divisor) : divisor;
 
-      p->children = arena_alloc(arena, num_children * sizeof(BlockNode *));
+      p->children =
+          (BlockNode **)arena_alloc(arena, num_children * sizeof(BlockNode *));
+      if (!p->children) {
+        free(current_marked);
+        free(next_marked);
+        free(candidates);
+        return nullptr;
+      }
       p->child_count = 0;
 
       if (!ensure_ptr_capacity(&candidates, &cand_cap,
@@ -360,7 +367,7 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
         free(current_marked);
         free(next_marked);
         free(candidates);
-        return NULL;
+        return nullptr;
       }
 
       for (size_t k = 0; k < num_children; ++k) {
@@ -378,7 +385,7 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
         if (cEnd > len)
           cEnd = len;
 
-        BlockNode *child = create_node(arena, cStart, cEnd - cStart, level, p);
+        auto child = create_node(arena, cStart, cEnd - cStart, level, p);
         candidates[cand_idx++] = child;
 
         p->children[p->child_count++] = child;
@@ -393,7 +400,7 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
       free(current_marked);
       free(next_marked);
       free(candidates);
-      return NULL;
+      return nullptr;
     }
 
     compute_hashes_parallel(candidates, cand_idx, text, len);

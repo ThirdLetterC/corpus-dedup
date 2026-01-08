@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(block_tree C)
 
+# Force Clang as the C compiler.
+set(CMAKE_C_COMPILER clang)
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
 option(USE_ASM "Enable NASM/asm fast paths" ON)
 set(HASH_UNROLL 8 CACHE STRING "Unroll factor for hash worker asm (4 or 8)")
 set(HASH_PREFETCH_DISTANCE 256 CACHE STRING "Prefetch distance in bytes for hash worker asm")
@@ -28,6 +34,7 @@ add_executable(corpus_dedup ${SRC})
 target_compile_features(corpus_dedup PRIVATE c_std_23)
 set_target_properties(corpus_dedup PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED YES)
 target_include_directories(corpus_dedup PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(corpus_dedup PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 find_package(Threads REQUIRED)
 target_link_libraries(corpus_dedup PRIVATE Threads::Threads)
@@ -93,5 +100,8 @@ endif()
 
 target_compile_options(corpus_dedup PRIVATE
   $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
-  $<$<CONFIG:Debug>:-O0 -g>
+  $<$<CONFIG:Debug>:-O0 -g -fsanitize=address,undefined,leak>
+)
+target_link_options(corpus_dedup PRIVATE
+  $<$<CONFIG:Debug>:-fsanitize=address,undefined,leak>
 )

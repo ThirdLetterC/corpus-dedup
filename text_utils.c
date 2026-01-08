@@ -1,6 +1,5 @@
 #include "text_utils.h"
 
-#include <stdbool.h>
 #include <string.h>
 
 static inline bool is_ascii_space(unsigned char c) { return c <= 0x20; }

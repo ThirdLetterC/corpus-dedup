@@ -1,7 +1,6 @@
 #ifndef NODE_SORT_H
 #define NODE_SORT_H
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

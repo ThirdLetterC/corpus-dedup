@@ -49,7 +49,7 @@ static int hash_pool_worker(void *arg) {
     last_work = pool->work_id;
 
     bool active = index < pool->active_count;
-    ThreadContext *ctx = active ? &pool->contexts[index] : NULL;
+    ThreadContext *ctx = active ? &pool->contexts[index] : nullptr;
 
     mtx_unlock(&pool->lock);
     if (active && ctx->start_idx < ctx->end_idx) {
@@ -77,7 +77,7 @@ static void hash_pool_destroy(HashThreadPool *pool) {
   mtx_unlock(&pool->lock);
 
   for (size_t i = 0; i < pool->thread_count; ++i) {
-    thrd_join(pool->threads[i], NULL);
+    thrd_join(pool->threads[i], nullptr);
   }
 
   cnd_destroy(&pool->done_cv);
@@ -136,7 +136,7 @@ fail_spawn:
   cnd_broadcast(&pool->start_cv);
   mtx_unlock(&pool->lock);
   for (size_t i = 0; i < created; ++i) {
-    thrd_join(pool->threads[i], NULL);
+    thrd_join(pool->threads[i], nullptr);
   }
   cnd_destroy(&pool->done_cv);
 fail_start:
@@ -153,14 +153,14 @@ fail:
 
 HashThreadPool *hash_pool_get(size_t thread_count) {
   if (thread_count <= 1)
-    return NULL;
+    return nullptr;
   if (g_hash_pool.threads && g_hash_pool.thread_count == thread_count) {
     return &g_hash_pool;
   }
 
   hash_pool_destroy(&g_hash_pool);
   if (!hash_pool_init(&g_hash_pool, thread_count)) {
-    return NULL;
+    return nullptr;
   }
   if (!g_hash_pool_registered) {
     atexit(hash_pool_global_cleanup);
