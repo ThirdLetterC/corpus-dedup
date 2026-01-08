@@ -8,7 +8,6 @@
 // clang -DHASH_PREFETCH_DISTANCE=384 -std=c2x -O3 -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=4 \
   -fprofile-use=block_tree.profdata sentence_splitter.c block_tree.c -o corpus_dedup_optimized
 
-#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
@@ -1095,6 +1094,8 @@ static size_t round_up_pow2(size_t value) {
   return p;
 }
 
+static inline bool is_ascii_space(unsigned char c) { return c <= 0x20; }
+
 static bool sentence_set_init(SentenceSet *set, size_t bucket_count) {
   if (!set)
     return false;
@@ -1195,18 +1196,18 @@ static bool sentence_set_insert(SentenceSet *set, const uint8_t *data,
 static size_t normalize_sentence(const uint8_t *data, size_t len, uint8_t *out,
                                  size_t out_cap) {
   size_t start = 0;
-  while (start < len && isspace((unsigned char)data[start])) {
+  while (start < len && is_ascii_space(data[start])) {
     start++;
   }
   size_t end = len;
-  while (end > start && isspace((unsigned char)data[end - 1])) {
+  while (end > start && is_ascii_space(data[end - 1])) {
     end--;
   }
 
   size_t out_len = 0;
   bool in_space = false;
   for (size_t i = start; i < end; ++i) {
-    if (isspace((unsigned char)data[i])) {
+    if (is_ascii_space(data[i])) {
       if (!in_space) {
         if (out_len < out_cap)
           out[out_len++] = ' ';
@@ -1288,18 +1289,6 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
 
   size_t out_pos = 0;
   const char *text = (const char *)input;
-  char *owned_text = nullptr;
-  if (input[len] != '\0') {
-    owned_text = malloc(len + 1);
-    if (!owned_text) {
-      free(norm_buf);
-      free(buffer);
-      return false;
-    }
-    memcpy(owned_text, input, len);
-    owned_text[len] = '\0';
-    text = owned_text;
-  }
 
   SentenceList sentences = split_text_to_sentences(text, len);
 
@@ -1310,7 +1299,6 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
                        len, buffer, &out_pos, out_cap, out_unique,
                        out_duplicates, duplicates_fp)) {
       free_sentence_list(&sentences);
-      free(owned_text);
       free(norm_buf);
       free(buffer);
       return false;
@@ -1318,7 +1306,6 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
   }
 
   free_sentence_list(&sentences);
-  free(owned_text);
 
   if (out_pos == 0) {
     free(norm_buf);
@@ -1475,7 +1462,13 @@ static double now_seconds(void) {
 static void render_progress(size_t done, size_t total, size_t bytes_done,
                             double start_time) {
   const int bar_width = 30;
-  double elapsed = now_seconds() - start_time;
+  static double last_update = 0.0;
+  double now = now_seconds();
+  if (now > 0.0 && done != 0 && done != total && now - last_update < 0.1) {
+    return;
+  }
+  last_update = now;
+  double elapsed = now - start_time;
   if (elapsed < 0.0001)
     elapsed = 0.0001;
   double rate = (double)done / elapsed;
