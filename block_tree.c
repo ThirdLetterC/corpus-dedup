@@ -38,6 +38,7 @@ const size_t ARENA_BLOCK_SIZE = 1024 * 1024 * 64; // 64 MiB
 const size_t FILE_BATCH_SIZE = 4096;
 const char *DUPLICATES_FILENAME = "duplicates.txt";
 const char *DEFAULT_MASK = "*.txt";
+const size_t SENTENCE_ARENA_BLOCK_SIZE = 1024 * 64;
 
 // ==========================================
 // 2. Data Structures
@@ -116,10 +117,25 @@ struct SentenceEntry {
   SentenceEntry *next;
 };
 
+typedef struct SentenceArenaBlock SentenceArenaBlock;
+
+struct SentenceArenaBlock {
+  uint8_t *data;
+  size_t cap;
+  size_t offset;
+  SentenceArenaBlock *next;
+};
+
+typedef struct {
+  SentenceArenaBlock *head;
+  size_t block_size;
+} SentenceArena;
+
 typedef struct {
   SentenceEntry **buckets;
   size_t bucket_count;
   size_t entry_count;
+  SentenceArena arena;
 } SentenceSet;
 
 typedef struct {
@@ -1096,6 +1112,55 @@ static size_t round_up_pow2(size_t value) {
 
 static inline bool is_ascii_space(unsigned char c) { return c <= 0x20; }
 
+static void sentence_arena_init(SentenceArena *arena, size_t block_size) {
+  if (!arena)
+    return;
+  arena->head = nullptr;
+  arena->block_size = block_size ? block_size : 1024;
+}
+
+static void sentence_arena_destroy(SentenceArena *arena) {
+  if (!arena)
+    return;
+  SentenceArenaBlock *block = arena->head;
+  while (block) {
+    SentenceArenaBlock *next = block->next;
+    free(block->data);
+    free(block);
+    block = next;
+  }
+  arena->head = nullptr;
+  arena->block_size = 0;
+}
+
+static void *sentence_arena_alloc(SentenceArena *arena, size_t size) {
+  if (!arena || size == 0)
+    return nullptr;
+  size_t aligned = (size + 7) & ~(size_t)7;
+  SentenceArenaBlock *block = arena->head;
+  if (!block || block->offset + aligned > block->cap) {
+    size_t cap = arena->block_size;
+    if (cap < aligned)
+      cap = aligned;
+    SentenceArenaBlock *next = malloc(sizeof(*next));
+    if (!next)
+      return nullptr;
+    next->data = malloc(cap);
+    if (!next->data) {
+      free(next);
+      return nullptr;
+    }
+    next->cap = cap;
+    next->offset = 0;
+    next->next = block;
+    arena->head = next;
+    block = next;
+  }
+  void *ptr = block->data + block->offset;
+  block->offset += aligned;
+  return ptr;
+}
+
 static bool sentence_set_init(SentenceSet *set, size_t bucket_count) {
   if (!set)
     return false;
@@ -1105,25 +1170,18 @@ static bool sentence_set_init(SentenceSet *set, size_t bucket_count) {
     return false;
   set->bucket_count = size;
   set->entry_count = 0;
+  sentence_arena_init(&set->arena, SENTENCE_ARENA_BLOCK_SIZE);
   return true;
 }
 
 static void sentence_set_destroy(SentenceSet *set) {
-  if (!set || !set->buckets)
+  if (!set)
     return;
-  for (size_t i = 0; i < set->bucket_count; ++i) {
-    SentenceEntry *entry = set->buckets[i];
-    while (entry) {
-      SentenceEntry *next = entry->next;
-      free(entry->data);
-      free(entry);
-      entry = next;
-    }
-  }
   free(set->buckets);
   set->buckets = nullptr;
   set->bucket_count = 0;
   set->entry_count = 0;
+  sentence_arena_destroy(&set->arena);
 }
 
 static bool sentence_set_rehash(SentenceSet *set, size_t new_bucket_count) {
@@ -1149,6 +1207,28 @@ static bool sentence_set_rehash(SentenceSet *set, size_t new_bucket_count) {
   return true;
 }
 
+static void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
+  if (!set || set->bucket_count == 0)
+    return;
+  const size_t avg_sentence = 64;
+  size_t expected = byte_len / avg_sentence;
+  if (expected < 16)
+    expected = 16;
+  size_t target = set->entry_count + expected;
+  size_t needed;
+  if (target > SIZE_MAX / 4) {
+    needed = SIZE_MAX;
+  } else {
+    needed = (target * 4) / 3;
+  }
+  if (needed <= set->bucket_count)
+    return;
+  size_t next_size = round_up_pow2(needed);
+  if (next_size > set->bucket_count) {
+    sentence_set_rehash(set, next_size);
+  }
+}
+
 static bool sentence_set_insert(SentenceSet *set, const uint8_t *data,
                                 size_t len, bool *inserted) {
   if (!set || !data || !inserted)
@@ -1168,17 +1248,14 @@ static bool sentence_set_insert(SentenceSet *set, const uint8_t *data,
     }
   }
 
-  uint8_t *copy = malloc(len);
-  if (!copy)
+  uint8_t *mem =
+      sentence_arena_alloc(&set->arena, sizeof(SentenceEntry) + len);
+  if (!mem)
     return false;
+  SentenceEntry *entry = (SentenceEntry *)mem;
+  uint8_t *copy = mem + sizeof(SentenceEntry);
   if (len > 0)
     memcpy(copy, data, len);
-
-  SentenceEntry *entry = malloc(sizeof(*entry));
-  if (!entry) {
-    free(copy);
-    return false;
-  }
   entry->hash = hash;
   entry->len = len;
   entry->data = copy;
@@ -1595,6 +1672,7 @@ static bool process_batch(FileItem *batch, size_t batch_count,
     size_t deduped_len = 0;
     size_t file_unique = 0;
     size_t file_duplicates = 0;
+    sentence_set_reserve_for_bytes(seen, item->byte_len);
     if (!deduplicate_sentences(item->raw_text, item->byte_len, seen, &deduped,
                                &deduped_len, &file_unique, &file_duplicates,
                                duplicates_fp)) {
