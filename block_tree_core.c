@@ -66,6 +66,10 @@ int hash_worker(void *arg);
 #else
 int hash_worker(void *arg) {
   ThreadContext *ctx = (ThreadContext *)arg;
+  const uint64_t *prefix = g_prefix_table;
+  const uint64_t *pow = g_pow_table;
+  bool use_prefix =
+      prefix && pow && g_prefix_size >= ctx->text_len + 1 && ctx->text_len > 0;
 
   for (size_t i = ctx->start_idx; i < ctx->end_idx; ++i) {
     BlockNode *node = ctx->nodes[i];
@@ -78,6 +82,16 @@ int hash_worker(void *arg) {
     size_t effective_len = node->length;
     if (node->start_pos + effective_len > ctx->text_len) {
       effective_len = ctx->text_len - node->start_pos;
+    }
+
+    if (use_prefix) {
+      size_t end = node->start_pos + effective_len;
+      if (end >= g_prefix_size)
+        end = g_prefix_size - 1;
+      uint64_t window =
+          prefix[end] - prefix[node->start_pos] * pow[effective_len];
+      node->block_id = window;
+      continue;
     }
 
     uint64_t h = 0;
@@ -129,12 +143,66 @@ int hash_worker(void *arg) {
 static ThreadContext *g_ctx_cache = nullptr;
 static size_t g_ctx_cache_cap = 0;
 static bool g_ctx_cache_registered = false;
+#if !HASH_WORKER_USE_ASM
+static const uint64_t *g_prefix_table = nullptr;
+static const uint64_t *g_pow_table = nullptr;
+static size_t g_prefix_size = 0;
+#endif
 
 static void free_ctx_cache(void) {
   free(g_ctx_cache);
   g_ctx_cache = nullptr;
   g_ctx_cache_cap = 0;
 }
+
+#if !HASH_WORKER_USE_ASM
+typedef struct {
+  uint64_t *prefix;
+  uint64_t *pow;
+  size_t size;
+} HashPrefixTables;
+
+static HashPrefixTables build_prefix_tables(const uint32_t *text, size_t len) {
+  HashPrefixTables tables = {.prefix = nullptr, .pow = nullptr, .size = 0};
+  size_t alloc_len = 0;
+  if (ckd_add(&alloc_len, len, (size_t)1))
+    return tables;
+
+  size_t alloc_bytes = 0;
+  if (ckd_mul(&alloc_bytes, alloc_len, sizeof(uint64_t)))
+    return tables;
+
+  tables.prefix = (uint64_t *)calloc(1, alloc_bytes);
+  tables.pow = (uint64_t *)calloc(1, alloc_bytes);
+  if (!tables.prefix || !tables.pow) {
+    free(tables.prefix);
+    free(tables.pow);
+    tables.prefix = nullptr;
+    tables.pow = nullptr;
+    tables.size = 0;
+    return tables;
+  }
+
+  tables.size = alloc_len;
+  tables.prefix[0] = 0;
+  tables.pow[0] = 1;
+  for (size_t i = 0; i < len; ++i) {
+    tables.prefix[i + 1] = tables.prefix[i] * HASH_MULT + (uint64_t)text[i];
+    tables.pow[i + 1] = tables.pow[i] * HASH_MULT;
+  }
+  return tables;
+}
+
+static void free_prefix_tables(HashPrefixTables *tables) {
+  if (!tables)
+    return;
+  free(tables->prefix);
+  free(tables->pow);
+  tables->prefix = nullptr;
+  tables->pow = nullptr;
+  tables->size = 0;
+}
+#endif
 
 static ThreadContext *ctx_buffer_acquire(size_t count) {
   if (count == 0)
@@ -158,8 +226,19 @@ static ThreadContext *ctx_buffer_acquire(size_t count) {
 
 void compute_hashes_parallel(BlockNode **candidates, size_t count,
                              const uint32_t *text, size_t len) {
+  ThreadContext *ctxs = nullptr;
+#if !HASH_WORKER_USE_ASM
+  HashPrefixTables tables = build_prefix_tables(text, len);
+  bool have_prefix = tables.prefix && tables.pow;
+  if (have_prefix) {
+    g_prefix_table = tables.prefix;
+    g_pow_table = tables.pow;
+    g_prefix_size = tables.size;
+  }
+#endif
+
   if (count == 0)
-    return;
+    goto finish;
 
   size_t thread_count = detect_thread_count();
   if (thread_count == 0)
@@ -172,7 +251,7 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
                          .text = text,
                          .text_len = len};
     hash_worker(&ctx);
-    return;
+    goto finish;
   }
 
   size_t threshold = HASH_PARALLEL_BASE * thread_count;
@@ -183,7 +262,7 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
                          .text = text,
                          .text_len = len};
     hash_worker(&ctx);
-    return;
+    goto finish;
   }
 
   HashThreadPool *pool = hash_pool_get(thread_count);
@@ -194,7 +273,7 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
                          .text = text,
                          .text_len = len};
     hash_worker(&ctx);
-    return;
+    goto finish;
   }
 
   size_t active = hash_pool_capacity(pool);
@@ -202,7 +281,7 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
     active = count;
   size_t chunk_size = (count + active - 1) / active;
 
-  ThreadContext *ctxs = ctx_buffer_acquire(active);
+  ctxs = ctx_buffer_acquire(active);
   if (!ctxs) {
     ThreadContext ctx = {.nodes = candidates,
                          .start_idx = 0,
@@ -210,7 +289,7 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
                          .text = text,
                          .text_len = len};
     hash_worker(&ctx);
-    return;
+    goto finish;
   }
 
   for (size_t i = 0; i < active; ++i) {
@@ -236,7 +315,14 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
                          .text_len = len};
     hash_worker(&ctx);
   }
-  free(ctxs);
+
+finish:
+#if !HASH_WORKER_USE_ASM
+  g_prefix_table = nullptr;
+  g_pow_table = nullptr;
+  g_prefix_size = 0;
+  free_prefix_tables(&tables);
+#endif
 }
 
 static bool blocks_equal(const BlockNode *a, const BlockNode *b,

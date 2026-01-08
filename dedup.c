@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <threads.h>
 #include <unistd.h>
 
@@ -15,6 +16,7 @@
 #include "block_tree.h"
 #include "ckdint_compat.h"
 #include "config.h"
+#include "hash_utils.h"
 #include "io_utils.h"
 #include "progress.h"
 #include "sentence_set.h"
@@ -223,18 +225,44 @@ static bool split_text_to_paragraphs(const char8_t *text, size_t len,
 }
 
 static bool emit_unit(const char8_t *data, size_t len, SentenceSet *seen,
-                      mtx_t *seen_lock, char8_t *norm_buf, size_t norm_cap,
-                      char8_t *out_buf, size_t *out_pos, size_t out_cap,
-                      size_t *out_unique, size_t *out_duplicates,
-                      FILE *duplicates_fp, mtx_t *duplicates_lock) {
+                      SentenceSet *local_seen, mtx_t *seen_lock,
+                      char8_t *norm_buf, size_t norm_cap, char8_t *out_buf,
+                      size_t *out_pos, size_t out_cap, size_t *out_unique,
+                      size_t *out_duplicates, FILE *duplicates_fp,
+                      mtx_t *duplicates_lock) {
   size_t norm_len = normalize_sentence(data, len, norm_buf, norm_cap);
   if (norm_len == 0)
     return true;
 
+  uint64_t hash = hash_bytes_fnv1a(norm_buf, norm_len);
+
+  if (local_seen) {
+    bool local_inserted = false;
+    if (!sentence_set_insert_hashed(local_seen, hash, norm_buf, norm_len,
+                                    &local_inserted)) {
+      return false;
+    }
+    if (!local_inserted) {
+      (*out_duplicates)++;
+      if (duplicates_fp) {
+        if (duplicates_lock)
+          mtx_lock(duplicates_lock);
+        bool ok = fwrite(norm_buf, 1, norm_len, duplicates_fp) == norm_len &&
+                  fputc('\n', duplicates_fp) != EOF;
+        if (duplicates_lock)
+          mtx_unlock(duplicates_lock);
+        if (!ok)
+          return false;
+      }
+      return true;
+    }
+  }
+
   bool inserted = false;
   if (seen_lock)
     mtx_lock(seen_lock);
-  bool inserted_ok = sentence_set_insert(seen, norm_buf, norm_len, &inserted);
+  bool inserted_ok =
+      sentence_set_insert_hashed(seen, hash, norm_buf, norm_len, &inserted);
   if (seen_lock)
     mtx_unlock(seen_lock);
   if (!inserted_ok) {
@@ -270,11 +298,11 @@ static bool emit_unit(const char8_t *data, size_t len, SentenceSet *seen,
 
 static bool deduplicate_spans(const char8_t *input, size_t input_len,
                               const SentenceSpan *spans, size_t span_count,
-                              SentenceSet *seen, mtx_t *seen_lock,
-                              DedupScratch *scratch, char8_t **out,
-                              size_t *out_len, size_t *out_unique,
-                              size_t *out_duplicates, FILE *duplicates_fp,
-                              mtx_t *duplicates_lock) {
+                              SentenceSet *local_seen, SentenceSet *seen,
+                              mtx_t *seen_lock, DedupScratch *scratch,
+                              char8_t **out, size_t *out_len,
+                              size_t *out_unique, size_t *out_duplicates,
+                              FILE *duplicates_fp, mtx_t *duplicates_lock) {
   if (!out || !out_len || !out_unique || !out_duplicates || !seen || !scratch)
     return false;
   *out = nullptr;
@@ -296,10 +324,11 @@ static bool deduplicate_spans(const char8_t *input, size_t input_len,
   for (size_t i = 0; i < span_count; ++i) {
     const char8_t *segment = spans[i].start;
     size_t segment_len = spans[i].len;
-    if (!emit_unit(segment, segment_len, seen, seen_lock, scratch->norm_buffer,
-                   scratch->norm_cap, scratch->dedup_buffer, &out_pos,
-                   scratch->dedup_cap, out_unique, out_duplicates,
-                   duplicates_fp, duplicates_lock)) {
+    if (!emit_unit(segment, segment_len, seen, local_seen, seen_lock,
+                   scratch->norm_buffer, scratch->norm_cap,
+                   scratch->dedup_buffer, &out_pos, scratch->dedup_cap,
+                   out_unique, out_duplicates, duplicates_fp,
+                   duplicates_lock)) {
       return false;
     }
   }
@@ -313,71 +342,74 @@ static bool deduplicate_spans(const char8_t *input, size_t input_len,
 }
 
 static bool deduplicate_sentences(const char8_t *input, size_t len,
-                                  SentenceSet *seen, mtx_t *seen_lock,
-                                  DedupScratch *scratch, char8_t **out,
-                                  size_t *out_len, size_t *out_unique,
-                                  size_t *out_duplicates, FILE *duplicates_fp,
-                                  mtx_t *duplicates_lock) {
+                                  SentenceSet *local_seen, SentenceSet *seen,
+                                  mtx_t *seen_lock, DedupScratch *scratch,
+                                  char8_t **out, size_t *out_len,
+                                  size_t *out_unique, size_t *out_duplicates,
+                                  FILE *duplicates_fp, mtx_t *duplicates_lock) {
   SentenceList sentences = split_text_to_sentences(input, len);
-  bool ok =
-      deduplicate_spans(input, len, sentences.sentences, sentences.count, seen,
-                        seen_lock, scratch, out, out_len, out_unique,
-                        out_duplicates, duplicates_fp, duplicates_lock);
+  bool ok = deduplicate_spans(input, len, sentences.sentences, sentences.count,
+                              local_seen, seen, seen_lock, scratch, out,
+                              out_len, out_unique, out_duplicates,
+                              duplicates_fp, duplicates_lock);
   free_sentence_list(&sentences);
   return ok;
 }
 
 static bool deduplicate_paragraphs(const char8_t *input, size_t len,
-                                   SentenceSet *seen, mtx_t *seen_lock,
-                                   DedupScratch *scratch, char8_t **out,
-                                   size_t *out_len, size_t *out_unique,
-                                   size_t *out_duplicates, FILE *duplicates_fp,
+                                   SentenceSet *local_seen, SentenceSet *seen,
+                                   mtx_t *seen_lock, DedupScratch *scratch,
+                                   char8_t **out, size_t *out_len,
+                                   size_t *out_unique, size_t *out_duplicates,
+                                   FILE *duplicates_fp,
                                    mtx_t *duplicates_lock) {
   ParagraphList paragraphs = {0};
   if (!split_text_to_paragraphs(input, len, &paragraphs)) {
     return false;
   }
 
-  bool ok = deduplicate_spans(
-      input, len, paragraphs.items, paragraphs.count, seen, seen_lock, scratch,
-      out, out_len, out_unique, out_duplicates, duplicates_fp, duplicates_lock);
+  bool ok = deduplicate_spans(input, len, paragraphs.items, paragraphs.count,
+                              local_seen, seen, seen_lock, scratch, out,
+                              out_len, out_unique, out_duplicates,
+                              duplicates_fp, duplicates_lock);
   free_paragraph_list(&paragraphs);
   return ok;
 }
 
 static bool deduplicate_document(const char8_t *input, size_t len,
-                                 SentenceSet *seen, mtx_t *seen_lock,
-                                 DedupScratch *scratch, char8_t **out,
-                                 size_t *out_len, size_t *out_unique,
-                                 size_t *out_duplicates, FILE *duplicates_fp,
-                                 mtx_t *duplicates_lock) {
+                                 SentenceSet *local_seen, SentenceSet *seen,
+                                 mtx_t *seen_lock, DedupScratch *scratch,
+                                 char8_t **out, size_t *out_len,
+                                 size_t *out_unique, size_t *out_duplicates,
+                                 FILE *duplicates_fp, mtx_t *duplicates_lock) {
   SentenceSpan single = {.start = input, .len = len};
   size_t span_count = input && len > 0 ? 1 : 0;
-  return deduplicate_spans(input, len, &single, span_count, seen, seen_lock,
-                           scratch, out, out_len, out_unique, out_duplicates,
-                           duplicates_fp, duplicates_lock);
+  return deduplicate_spans(input, len, &single, span_count, local_seen, seen,
+                           seen_lock, scratch, out, out_len, out_unique,
+                           out_duplicates, duplicates_fp, duplicates_lock);
 }
 
 static bool deduplicate_with_mode(DedupMode mode, const char8_t *input,
-                                  size_t len, SentenceSet *seen,
-                                  mtx_t *seen_lock, DedupScratch *scratch,
-                                  char8_t **out, size_t *out_len,
-                                  size_t *out_unique, size_t *out_duplicates,
-                                  FILE *duplicates_fp, mtx_t *duplicates_lock) {
+                                  size_t len, SentenceSet *local_seen,
+                                  SentenceSet *seen, mtx_t *seen_lock,
+                                  DedupScratch *scratch, char8_t **out,
+                                  size_t *out_len, size_t *out_unique,
+                                  size_t *out_duplicates, FILE *duplicates_fp,
+                                  mtx_t *duplicates_lock) {
   switch (mode) {
   case DEDUP_MODE_DOCUMENT:
-    return deduplicate_document(input, len, seen, seen_lock, scratch, out,
-                                out_len, out_unique, out_duplicates,
-                                duplicates_fp, duplicates_lock);
+    return deduplicate_document(input, len, local_seen, seen, seen_lock,
+                                scratch, out, out_len, out_unique,
+                                out_duplicates, duplicates_fp, duplicates_lock);
   case DEDUP_MODE_PARAGRAPH:
-    return deduplicate_paragraphs(input, len, seen, seen_lock, scratch, out,
-                                  out_len, out_unique, out_duplicates,
-                                  duplicates_fp, duplicates_lock);
+    return deduplicate_paragraphs(
+        input, len, local_seen, seen, seen_lock, scratch, out, out_len,
+        out_unique, out_duplicates, duplicates_fp, duplicates_lock);
   case DEDUP_MODE_SENTENCE:
   default:
-    return deduplicate_sentences(input, len, seen, seen_lock, scratch, out,
-                                 out_len, out_unique, out_duplicates,
-                                 duplicates_fp, duplicates_lock);
+    return deduplicate_sentences(
+        input, len, local_seen, seen, seen_lock, scratch, out, out_len,
+        out_unique, out_duplicates, duplicates_fp, duplicates_lock);
   }
 }
 
@@ -464,6 +496,17 @@ static size_t detect_thread_count() {
   return cached;
 }
 
+static size_t peak_rss_bytes() {
+  struct rusage usage;
+  if (getrusage(RUSAGE_SELF, &usage) != 0)
+    return 0;
+#if defined(__APPLE__)
+  return (size_t)usage.ru_maxrss;
+#else
+  return (size_t)usage.ru_maxrss * 1024u;
+#endif
+}
+
 typedef struct {
   FileItem *batch;
   size_t batch_count;
@@ -485,6 +528,8 @@ typedef struct {
 static int batch_worker(void *arg) {
   auto ctx = (WorkerContext *)arg;
   DedupScratch scratch = {0};
+  SentenceSet local_seen = {0};
+  bool local_seen_init = sentence_set_init(&local_seen, 512);
 
   for (;;) {
     size_t idx =
@@ -517,6 +562,7 @@ static int batch_worker(void *arg) {
     size_t file_duplicates = 0;
 
     if (!deduplicate_with_mode(ctx->dedup_mode, item->raw_text, item->byte_len,
+                               local_seen_init ? &local_seen : nullptr,
                                ctx->seen, ctx->seen_lock, &scratch, &deduped,
                                &deduped_len, &file_unique, &file_duplicates,
                                ctx->duplicates_fp, ctx->duplicates_lock)) {
@@ -581,6 +627,9 @@ static int batch_worker(void *arg) {
     free(item->input_path);
 
   finish_file:
+    if (local_seen_init) {
+      sentence_set_clear(&local_seen);
+    }
     if (processed_bytes > 0) {
       atomic_fetch_add_explicit(&ctx->stats->bytes_processed, processed_bytes,
                                 memory_order_relaxed);
@@ -600,6 +649,9 @@ static int batch_worker(void *arg) {
 
   free(scratch.dedup_buffer);
   free(scratch.norm_buffer);
+  if (local_seen_init) {
+    sentence_set_destroy(&local_seen);
+  }
   return 0;
 }
 
@@ -995,13 +1047,15 @@ int run_dedup(int argc, char **argv) {
   double duplicate_pct =
       total_units == 0 ? 0.0
                        : (double)duplicate_units * 100.0 / (double)total_units;
+  size_t peak_rss = peak_rss_bytes();
+  double peak_mib = peak_rss == 0 ? 0.0 : (double)peak_rss / (1024.0 * 1024.0);
 
   const char *unit_label = dedup_unit_plural(dedup_mode);
   printf("\nDedup summary (%s-level): matched %zu file(s), wrote %zu, empty "
          "%zu, unique %s %zu, duplicate %s %zu (%.2f%%), errors %zu, "
-         "elapsed %.2f min\n",
+         "elapsed %.2f min, peak RSS %.2f MiB\n",
          dedup_mode_name(dedup_mode), matched, files_written, files_empty,
          unit_label, unique_units, unit_label, duplicate_units, duplicate_pct,
-         total_errors, elapsed_min);
+         total_errors, elapsed_min, peak_mib);
   return total_errors == 0 ? 0 : 1;
 }

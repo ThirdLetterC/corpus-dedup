@@ -357,98 +357,32 @@ static void wavesort_block_nodes(BlockNode **items, BlockNode **tmp,
 // Radix sort helpers
 // ==========================================
 
-[[maybe_unused]] static void radix_histogram_length_c(BlockNode **src,
-                                                      size_t count,
-                                                      unsigned int shift,
-                                                      size_t *buckets) {
-  for (size_t i = 0; i < count; ++i) {
-    size_t key = src[i]->length;
-    buckets[(key >> shift) & 0xFF]++;
-  }
-}
-
-[[maybe_unused]] static void
-radix_scatter_length_c(BlockNode **src, BlockNode **dst, size_t count,
-                       unsigned int shift, size_t *buckets) {
-  for (size_t i = 0; i < count; ++i) {
-    size_t key = src[i]->length;
-    size_t idx = (key >> shift) & 0xFF;
-    dst[buckets[idx]++] = src[i];
-  }
-}
-
-[[maybe_unused]] static void radix_histogram_block_id_c(BlockNode **src,
-                                                        size_t count,
-                                                        unsigned int shift,
-                                                        size_t *buckets) {
-  for (size_t i = 0; i < count; ++i) {
-    uint64_t key = src[i]->block_id;
-    buckets[(key >> shift) & 0xFF]++;
-  }
-}
-
-[[maybe_unused]] static void
-radix_scatter_block_id_c(BlockNode **src, BlockNode **dst, size_t count,
-                         unsigned int shift, size_t *buckets) {
-  for (size_t i = 0; i < count; ++i) {
-    uint64_t key = src[i]->block_id;
-    size_t idx = (key >> shift) & 0xFF;
-    dst[buckets[idx]++] = src[i];
-  }
-}
-
-#if RADIX_SORT_USE_ASM_IMPL
-void radix_histogram_length_asm(BlockNode **src, size_t count,
-                                unsigned int shift, size_t *buckets);
-void radix_scatter_length_asm(BlockNode **src, BlockNode **dst, size_t count,
-                              unsigned int shift, size_t *buckets);
-void radix_histogram_block_id_asm(BlockNode **src, size_t count,
-                                  unsigned int shift, size_t *buckets);
-void radix_scatter_block_id_asm(BlockNode **src, BlockNode **dst, size_t count,
-                                unsigned int shift, size_t *buckets);
-
-#endif
-
-static void radix_pass_length(BlockNode **src, BlockNode **dst, size_t count,
-                              unsigned int shift) {
+static void radix_pass_triplet(const uint64_t *keys_in,
+                               const uint64_t *lengths_in,
+                               const uint64_t *hashes_in,
+                               BlockNode *const *nodes_in, uint64_t *keys_out,
+                               uint64_t *lengths_out, uint64_t *hashes_out,
+                               BlockNode **nodes_out, size_t count,
+                               unsigned int shift) {
   size_t buckets[256] = {0};
-#if RADIX_SORT_USE_ASM_IMPL
-  radix_histogram_length_asm(src, count, shift, buckets);
-#else
-  radix_histogram_length_c(src, count, shift, buckets);
-#endif
   size_t sum = 0;
+  for (size_t i = 0; i < count; ++i) {
+    size_t idx = (size_t)((keys_in[i] >> shift) & 0xFFu);
+    buckets[idx]++;
+  }
   for (size_t i = 0; i < 256; ++i) {
     size_t c = buckets[i];
     buckets[i] = sum;
     sum += c;
   }
-#if RADIX_SORT_USE_ASM_IMPL
-  radix_scatter_length_asm(src, dst, count, shift, buckets);
-#else
-  radix_scatter_length_c(src, dst, count, shift, buckets);
-#endif
-}
-
-static void radix_pass_block_id(BlockNode **src, BlockNode **dst, size_t count,
-                                unsigned int shift) {
-  size_t buckets[256] = {0};
-#if RADIX_SORT_USE_ASM_IMPL
-  radix_histogram_block_id_asm(src, count, shift, buckets);
-#else
-  radix_histogram_block_id_c(src, count, shift, buckets);
-#endif
-  size_t sum = 0;
-  for (size_t i = 0; i < 256; ++i) {
-    size_t c = buckets[i];
-    buckets[i] = sum;
-    sum += c;
+  for (size_t i = 0; i < count; ++i) {
+    size_t idx = (size_t)((keys_in[i] >> shift) & 0xFFu);
+    size_t dest = buckets[idx]++;
+    keys_out[dest] = keys_in[i];
+    lengths_out[dest] = lengths_in[i];
+    hashes_out[dest] = hashes_in[i];
+    nodes_out[dest] = nodes_in[i];
   }
-#if RADIX_SORT_USE_ASM_IMPL
-  radix_scatter_block_id_asm(src, dst, count, shift, buckets);
-#else
-  radix_scatter_block_id_c(src, dst, count, shift, buckets);
-#endif
 }
 
 bool radix_sort_block_nodes(BlockNode **items, BlockNode **tmp, size_t count) {
@@ -458,22 +392,79 @@ bool radix_sort_block_nodes(BlockNode **items, BlockNode **tmp, size_t count) {
     wavesort_block_nodes(items, tmp, count);
     return true;
   }
-  BlockNode **src = items;
-  BlockNode **dst = tmp;
+
+  uint64_t *len_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
+  uint64_t *hash_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
+  uint64_t *len_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
+  uint64_t *hash_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
+  BlockNode **node_tmp =
+      tmp ? tmp : (BlockNode **)malloc(count * sizeof(BlockNode *));
+
+  if (!len_keys || !hash_keys || !len_tmp || !hash_tmp || !node_tmp) {
+    free(len_keys);
+    free(hash_keys);
+    free(len_tmp);
+    free(hash_tmp);
+    if (!tmp)
+      free(node_tmp);
+    wavesort_block_nodes(items, tmp, count);
+    return true;
+  }
+
+  for (size_t i = 0; i < count; ++i) {
+    len_keys[i] = (uint64_t)items[i]->length;
+    hash_keys[i] = items[i]->block_id;
+  }
+
+  BlockNode **nodes_src = items;
+  BlockNode **nodes_dst = node_tmp;
+  uint64_t *len_src = len_keys;
+  uint64_t *len_dst = len_tmp;
+  uint64_t *hash_src = hash_keys;
+  uint64_t *hash_dst = hash_tmp;
+
   for (size_t pass = 0; pass < sizeof(size_t); ++pass) {
-    radix_pass_length(src, dst, count, (unsigned int)(pass * 8));
-    BlockNode **swap = src;
-    src = dst;
-    dst = swap;
+    radix_pass_triplet(len_src, len_src, hash_src, nodes_src, len_dst, len_dst,
+                       hash_dst, nodes_dst, count, (unsigned int)(pass * 8));
+    uint64_t *len_swap = len_src;
+    len_src = len_dst;
+    len_dst = len_swap;
+
+    uint64_t *hash_swap = hash_src;
+    hash_src = hash_dst;
+    hash_dst = hash_swap;
+
+    BlockNode **node_swap = nodes_src;
+    nodes_src = nodes_dst;
+    nodes_dst = node_swap;
   }
+
   for (size_t pass = 0; pass < sizeof(uint64_t); ++pass) {
-    radix_pass_block_id(src, dst, count, (unsigned int)(pass * 8));
-    BlockNode **swap = src;
-    src = dst;
-    dst = swap;
+    radix_pass_triplet(hash_src, len_src, hash_src, nodes_src, hash_dst,
+                       len_dst, hash_dst, nodes_dst, count,
+                       (unsigned int)(pass * 8));
+    uint64_t *len_swap = len_src;
+    len_src = len_dst;
+    len_dst = len_swap;
+
+    uint64_t *hash_swap = hash_src;
+    hash_src = hash_dst;
+    hash_dst = hash_swap;
+
+    BlockNode **node_swap = nodes_src;
+    nodes_src = nodes_dst;
+    nodes_dst = node_swap;
   }
-  if (src != items) {
-    memcpy(items, src, count * sizeof(*items));
+
+  if (nodes_src != items) {
+    memcpy(items, nodes_src, count * sizeof(*items));
   }
+
+  free(len_keys);
+  free(hash_keys);
+  free(len_tmp);
+  free(hash_tmp);
+  if (!tmp)
+    free(node_tmp);
   return true;
 }
