@@ -224,7 +224,7 @@ static bool process_text(const char *label, const char8_t *raw_text,
 }
 
 static size_t parse_thread_env() {
-  constexpr const char *ENV_NAME = "DEDUP_THREADS";
+  constexpr char ENV_NAME[] = "DEDUP_THREADS";
   const char *env = getenv(ENV_NAME);
   if (!env || !*env)
     return 0;

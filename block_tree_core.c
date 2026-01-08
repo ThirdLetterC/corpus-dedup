@@ -2,6 +2,7 @@
 
 #include "ckdint_compat.h"
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -466,14 +467,15 @@ void print_tree(const BlockNode *node, int depth) {
     printf("  ");
 
   if (node->is_marked) {
-    printf("[M] Hash:%lX Pos:%zu Len:%zu\n", node->block_id, node->start_pos,
-           node->length);
+    printf("[M] Hash:%" PRIX64 " Pos:%zu Len:%zu\n", node->block_id,
+           node->start_pos, node->length);
 
     for (size_t i = 0; i < node->child_count; ++i) {
       print_tree(node->children[i], depth + 1);
     }
   } else {
-    printf("[P] -> Target:%zu (Hash:%lX)\n", node->target_pos, node->block_id);
+    printf("[P] -> Target:%zu (Hash:%" PRIX64 ")\n", node->target_pos,
+           node->block_id);
   }
 }
 
@@ -489,7 +491,7 @@ uint32_t query_access(const BlockNode *node, size_t i, const uint32_t *text) {
   }
 
   for (size_t k = 0; k < node->child_count; ++k) {
-    BlockNode *child = node->children[k];
+    const BlockNode *child = node->children[k];
     if (i >= child->start_pos && i < child->start_pos + child->length) {
       return query_access(child, i, text);
     }

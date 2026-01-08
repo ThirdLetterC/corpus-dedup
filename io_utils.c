@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "io_utils.h"
 #include "utf8.h"
 
@@ -7,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
   if (!path || !out || !out_len)
@@ -18,18 +21,23 @@ bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
     return false;
   }
 
-  if (fseek(fp, 0, SEEK_END) != 0) {
+  if (fseeko(fp, 0, SEEK_END) != 0) {
     fprintf(stderr, "Failed to seek input file: %s\n", path);
     fclose(fp);
     return false;
   }
-  long file_size = ftell(fp);
+  off_t file_size = ftello(fp);
   if (file_size < 0) {
     fprintf(stderr, "Failed to get input file size: %s\n", path);
     fclose(fp);
     return false;
   }
-  if (fseek(fp, 0, SEEK_SET) != 0) {
+  if ((uintmax_t)file_size > SIZE_MAX) {
+    fprintf(stderr, "Input file too large: %s\n", path);
+    fclose(fp);
+    return false;
+  }
+  if (fseeko(fp, 0, SEEK_SET) != 0) {
     fprintf(stderr, "Failed to rewind input file: %s\n", path);
     fclose(fp);
     return false;
