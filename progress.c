@@ -6,14 +6,14 @@
 #include <stdio.h>
 #include <time.h>
 
-double now_seconds(void) {
+double now_seconds() {
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     return 0.0;
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-uint64_t now_ns(void) {
+uint64_t now_ns() {
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     return 0;
@@ -49,7 +49,7 @@ void print_duration_ns(uint64_t ns) {
 
 void render_progress(size_t done, size_t total, size_t bytes_done,
                      double start_time) {
-  const int bar_width = 30;
+  constexpr int bar_width = 30;
   static double last_update = 0.0;
   double now = now_seconds();
   if (now > 0.0 && done != 0 && done != total && now - last_update < 0.1) {

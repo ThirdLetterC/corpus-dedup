@@ -5,6 +5,11 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+static constexpr size_t MIN_BUCKET_COUNT = 16;
+static constexpr size_t DEFAULT_BLOCK_SIZE = 1024;
+static constexpr size_t AVG_SENTENCE_BYTES = 64;
+
 typedef struct SentenceEntry {
   uint64_t hash;
   size_t len;
@@ -37,7 +42,7 @@ static void sentence_arena_init(SentenceArena *arena, size_t block_size) {
   if (!arena)
     return;
   arena->head = nullptr;
-  arena->block_size = block_size ? block_size : 1024;
+  arena->block_size = block_size ? block_size : DEFAULT_BLOCK_SIZE;
 }
 
 static void sentence_arena_destroy(SentenceArena *arena) {
@@ -85,7 +90,8 @@ static void *sentence_arena_alloc(SentenceArena *arena, size_t size) {
 bool sentence_set_init(SentenceSet *set, size_t bucket_count) {
   if (!set)
     return false;
-  size_t size = round_up_pow2(bucket_count < 16 ? 16 : bucket_count);
+  size_t size = round_up_pow2(bucket_count < MIN_BUCKET_COUNT ? MIN_BUCKET_COUNT
+                                                              : bucket_count);
   size_t alloc_size = 0;
   if (ckd_mul(&alloc_size, size, sizeof(*set->buckets)))
     return false;
@@ -137,10 +143,9 @@ static bool sentence_set_rehash(SentenceSet *set, size_t new_bucket_count) {
 void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
   if (!set || set->bucket_count == 0)
     return;
-  const size_t avg_sentence = 64;
-  size_t expected = byte_len / avg_sentence;
-  if (expected < 16)
-    expected = 16;
+  size_t expected = byte_len / AVG_SENTENCE_BYTES;
+  if (expected < MIN_BUCKET_COUNT)
+    expected = MIN_BUCKET_COUNT;
   size_t target = 0;
   if (ckd_add(&target, set->entry_count, expected)) {
     target = SIZE_MAX;

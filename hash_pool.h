@@ -33,6 +33,6 @@ bool hash_pool_run(HashThreadPool *pool, const ThreadContext *contexts,
 /**
  * Destroy global pool at process exit (registered via atexit).
  */
-void hash_pool_global_cleanup(void);
+void hash_pool_global_cleanup();
 
 #endif

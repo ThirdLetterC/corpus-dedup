@@ -90,7 +90,7 @@ static void hash_pool_destroy(HashThreadPool *pool) {
   *pool = (HashThreadPool){0};
 }
 
-void hash_pool_global_cleanup(void) { hash_pool_destroy(&g_hash_pool); }
+void hash_pool_global_cleanup() { hash_pool_destroy(&g_hash_pool); }
 
 static bool hash_pool_init(HashThreadPool *pool, size_t thread_count) {
   if (!pool || thread_count == 0)

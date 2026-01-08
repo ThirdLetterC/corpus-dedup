@@ -1,10 +1,9 @@
 ## 1. Role & Philosophy
-
 **Role:** Expert Systems Programmer specializing in Strict C23.
 **Objective:** Produce high-performance, type-safe, and self-documenting code that leverages C23 semantics to eliminate legacy undefined behaviors and boilerplate.
 
 **Core Principles:**
-* **Type Safety:** Leverage `auto` inference and `const` to reduce type mismatches.
+* **Type Safety:** Leverage `auto` inference and `constexpr` to reduce type mismatches.
 * **Explicit Intent:** Use standard attributes (`[[nodiscard]]`, `[[maybe_unused]]`) to communicate intent to both the compiler and the reader.
 * **Modernity:** Reject C99/C11/C17 conventions where C23 offers a superior native alternative (e.g., `nullptr` vs `NULL`).
 * **Zero-Warning Policy:** Code must compile with `-std=c23 -Wall -Wextra -Wpedantic -Werror`.
@@ -17,7 +16,7 @@
 * **Booleans:** Use the built-in keywords `bool`, `true`, and `false`. **Do not** include `<stdbool.h>`.
 * **Pointers:** Always use `nullptr` (type `nullptr_t`) instead of `NULL` or `0`.
 * **Type Inference:** Use `auto` for variable declarations where the type is obvious from the initializer (e.g., `auto count = get_count();`).
-* **Constants:** Use `const` for compile-time constants instead of `#define` or `static const`.
+* **Constants:** Use `constexpr` for compile-time constants instead of `#define` or `static const`.
 * **Prototypes:** `void func()` implies no arguments (deprecated `func(void)` is no longer necessary, though permitted).
 * **Literals:** Use digit separators for readability (e.g., `1_000_000`, `0xCAFE_BABE`). Use binary literals (`0b1010`) for bitmasks.
 
@@ -111,7 +110,7 @@ void packet_destroy(packet_t *pkt) {
 
 // Example usage
 void usage_example() {
-    const size_t PKT_SIZE = 1_024; // C23 const + digit separator
+    constexpr size_t PKT_SIZE = 1_024; // C23 constexpr + digit separator
     
     packet_t *p = packet_create(PKT_SIZE);
     if (p) {
@@ -129,6 +128,6 @@ void usage_example() {
 1. **Legacy NULL:** Do not use `NULL`; use `nullptr`.
 2. **Legacy Bool:** Do not include `<stdbool.h>`; use built-in keywords.
 3. **K&R Declarations:** Do not use `func(void)` to denote empty arguments; use `func()`.
-4. **Macro Constants:** Avoid `#define` for values; use `const`.
+4. **Macro Constants:** Avoid `#define` for values; use `constexpr`.
 5. **Implicit Fallthrough:** Switch cases falling through without `[[fallthrough]]` are forbidden.
 6. **VLAs:** No Variable Length Arrays on the stack.

@@ -11,7 +11,7 @@
 #endif
 // --- Constants & Helpers ---
 
-static const size_t k_init_capacity = 16;
+static constexpr size_t k_init_capacity = 16;
 
 /**
  * @brief Checks if a code point is a distinct CJK/Wide sentence terminator.
@@ -412,7 +412,7 @@ void free_sentence_list(SentenceList *list) {
 }
 
 #ifdef SENTENCE_SPLITTER_DEMO
-int main(void) {
+int main() {
   // Example text containing English, numbers, and Japanese
   const char *article =
       "Hello World. This is a test... with numbers 3.14 included. "

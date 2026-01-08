@@ -18,12 +18,14 @@
 #define HASH_WORKER_USE_ASM 0
 #endif
 
-#define HASH_MULT_POW1 ((uint64_t)HASH_MULT_POW1_IMM)
-#define HASH_MULT_POW2 ((uint64_t)HASH_MULT_POW2_IMM)
-#define HASH_MULT_POW3 ((uint64_t)HASH_MULT_POW3_IMM)
-#define HASH_MULT_POW4 ((uint64_t)HASH_MULT_POW4_IMM)
+#if !HASH_WORKER_USE_ASM
+static constexpr uint64_t HASH_MULT_POW1 = (uint64_t)HASH_MULT_POW1_IMM;
+static constexpr uint64_t HASH_MULT_POW2 = (uint64_t)HASH_MULT_POW2_IMM;
+static constexpr uint64_t HASH_MULT_POW3 = (uint64_t)HASH_MULT_POW3_IMM;
+static constexpr uint64_t HASH_MULT_POW4 = (uint64_t)HASH_MULT_POW4_IMM;
+#endif
 
-static size_t parse_thread_env(void) {
+static size_t parse_thread_env() {
   const char *env = getenv("BLOCK_TREE_THREADS");
   if (!env || !*env)
     return 0;
@@ -34,7 +36,7 @@ static size_t parse_thread_env(void) {
   return (size_t)val;
 }
 
-static size_t detect_thread_count(void) {
+static size_t detect_thread_count() {
   size_t env_threads = parse_thread_env();
   if (env_threads > 0)
     return env_threads;
