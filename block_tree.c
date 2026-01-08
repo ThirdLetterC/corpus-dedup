@@ -50,6 +50,7 @@ const uint64_t HASH_MULT = 31ULL;
 const size_t THREAD_COUNT_FALLBACK = 4;
 const size_t ARENA_BLOCK_SIZE = 1024 * 1024 * 64; // 64 MiB
 const size_t FILE_BATCH_SIZE = 4096;
+const char *DUPLICATES_FILENAME = "duplicates.txt";
 
 // ==========================================
 // 2. Data Structures
@@ -1168,7 +1169,8 @@ static size_t normalize_sentence(const uint8_t *data, size_t len, uint8_t *out, 
 static bool emit_sentence(const uint8_t *data, size_t len, SentenceSet *seen,
                           uint8_t *norm_buf, size_t norm_cap,
                           uint8_t *out_buf, size_t *out_pos, size_t out_cap,
-                          size_t *out_unique, size_t *out_duplicates) {
+                          size_t *out_unique, size_t *out_duplicates,
+                          FILE *duplicates_fp) {
     size_t norm_len = normalize_sentence(data, len, norm_buf, norm_cap);
     if (norm_len == 0) return true;
 
@@ -1190,13 +1192,22 @@ static bool emit_sentence(const uint8_t *data, size_t len, SentenceSet *seen,
         *out_pos += norm_len;
     } else {
         (*out_duplicates)++;
+        if (duplicates_fp) {
+            if (fwrite(norm_buf, 1, norm_len, duplicates_fp) != norm_len) {
+                return false;
+            }
+            if (fputc('\n', duplicates_fp) == EOF) {
+                return false;
+            }
+        }
     }
     return true;
 }
 
 static bool deduplicate_sentences(const uint8_t *input, size_t len, SentenceSet *seen,
                                   uint8_t **out, size_t *out_len,
-                                  size_t *out_unique, size_t *out_duplicates) {
+                                  size_t *out_unique, size_t *out_duplicates,
+                                  FILE *duplicates_fp) {
     if (!out || !out_len || !out_unique || !out_duplicates || !seen) return false;
     *out = nullptr;
     *out_len = 0;
@@ -1238,7 +1249,7 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len, SentenceSet 
             }
             if (!emit_sentence(input + sentence_start, end - sentence_start, seen,
                                norm_buf, len, buffer, &out_pos, out_cap,
-                               out_unique, out_duplicates)) {
+                               out_unique, out_duplicates, duplicates_fp)) {
                 free(norm_buf);
                 free(buffer);
                 return false;
@@ -1252,7 +1263,7 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len, SentenceSet 
             input[i + 1] == '\n' && input[i + 2] == '\r' && input[i + 3] == '\n') {
             if (!emit_sentence(input + sentence_start, i - sentence_start, seen,
                                norm_buf, len, buffer, &out_pos, out_cap,
-                               out_unique, out_duplicates)) {
+                               out_unique, out_duplicates, duplicates_fp)) {
                 free(norm_buf);
                 free(buffer);
                 return false;
@@ -1265,7 +1276,7 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len, SentenceSet 
         if (input[i] == '\n' && i + 1 < len && input[i + 1] == '\n') {
             if (!emit_sentence(input + sentence_start, i - sentence_start, seen,
                                norm_buf, len, buffer, &out_pos, out_cap,
-                               out_unique, out_duplicates)) {
+                               out_unique, out_duplicates, duplicates_fp)) {
                 free(norm_buf);
                 free(buffer);
                 return false;
@@ -1280,7 +1291,7 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len, SentenceSet 
 
     if (!emit_sentence(input + sentence_start, len - sentence_start, seen,
                        norm_buf, len, buffer, &out_pos, out_cap,
-                       out_unique, out_duplicates)) {
+                       out_unique, out_duplicates, duplicates_fp)) {
         free(norm_buf);
         free(buffer);
         return false;
@@ -1514,7 +1525,8 @@ static bool process_text(const char *label, const uint8_t *raw_text, size_t byte
 }
 
 static bool process_batch(FileItem *batch, size_t batch_count, const char *output_dir,
-                          SentenceSet *seen, size_t *files_written, size_t *files_empty,
+                          SentenceSet *seen, FILE *duplicates_fp,
+                          size_t *files_written, size_t *files_empty,
                           size_t *unique_sentences, size_t *duplicate_sentences, size_t *errors,
                           size_t *processed, size_t *bytes_processed,
                           size_t total_files, double start_time) {
@@ -1546,7 +1558,7 @@ static bool process_batch(FileItem *batch, size_t batch_count, const char *outpu
         size_t file_unique = 0;
         size_t file_duplicates = 0;
         if (!deduplicate_sentences(item->raw_text, item->byte_len, seen, &deduped, &deduped_len,
-                                   &file_unique, &file_duplicates)) {
+                                   &file_unique, &file_duplicates, duplicates_fp)) {
             fprintf(stderr, "Failed to deduplicate content for: %s\n", item->name);
             (*errors)++;
             free(item->raw_text);
@@ -1649,6 +1661,8 @@ int main(int argc, char **argv) {
     size_t duplicate_sentences = 0;
     size_t errors = 0;
     bool abort_scan = false;
+    FILE *duplicates_fp = nullptr;
+    char *duplicates_path = nullptr;
 
     FileItem *items = nullptr;
     size_t items_count = 0;
@@ -1657,6 +1671,22 @@ int main(int argc, char **argv) {
     SentenceSet seen = {0};
     if (!sentence_set_init(&seen, 1024)) {
         fprintf(stderr, "Failed to allocate dedup index.\n");
+        closedir(dir);
+        return 1;
+    }
+
+    duplicates_path = join_path(output_dir, DUPLICATES_FILENAME);
+    if (!duplicates_path) {
+        fprintf(stderr, "Failed to allocate duplicates output path.\n");
+        sentence_set_destroy(&seen);
+        closedir(dir);
+        return 1;
+    }
+    duplicates_fp = fopen(duplicates_path, "wb");
+    if (!duplicates_fp) {
+        fprintf(stderr, "Failed to open duplicates file: %s\n", duplicates_path);
+        free(duplicates_path);
+        sentence_set_destroy(&seen);
         closedir(dir);
         return 1;
     }
@@ -1735,9 +1765,10 @@ int main(int argc, char **argv) {
                     items[i + j].input_path = nullptr;
                 }
 
-                if (!process_batch(batch, batch_count, output_dir, &seen, &files_written,
-                                   &files_empty, &unique_sentences, &duplicate_sentences, &errors,
-                                   &processed, &bytes_processed, items_count, start_time)) {
+                if (!process_batch(batch, batch_count, output_dir, &seen, duplicates_fp,
+                                   &files_written, &files_empty, &unique_sentences,
+                                   &duplicate_sentences, &errors, &processed,
+                                   &bytes_processed, items_count, start_time)) {
                     abort_scan = true;
                     break;
                 }
@@ -1757,6 +1788,15 @@ int main(int argc, char **argv) {
     }
     free(items);
     sentence_set_destroy(&seen);
+
+    if (duplicates_fp) {
+        if (fclose(duplicates_fp) != 0) {
+            fprintf(stderr, "Failed to close duplicates file: %s\n",
+                    duplicates_path ? duplicates_path : "(unknown)");
+            errors++;
+        }
+    }
+    free(duplicates_path);
 
     if (abort_scan) {
         return 1;
