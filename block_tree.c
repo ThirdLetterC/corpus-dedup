@@ -39,6 +39,7 @@ const size_t FILE_BATCH_SIZE = 4096;
 const char *DUPLICATES_FILENAME = "duplicates.txt";
 const char *DEFAULT_MASK = "*.txt";
 const size_t SENTENCE_ARENA_BLOCK_SIZE = 1024 * 64;
+const size_t HASH_PARALLEL_THRESHOLD = 256;
 
 // ==========================================
 // 2. Data Structures
@@ -677,6 +678,16 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
   if (count == 0)
     return;
 
+  if (count < HASH_PARALLEL_THRESHOLD) {
+    ThreadContext ctx = {.nodes = candidates,
+                         .start_idx = 0,
+                         .end_idx = count,
+                         .text = text,
+                         .text_len = len};
+    hash_worker(&ctx);
+    return;
+  }
+
   size_t thread_count = detect_thread_count();
   if (thread_count == 0)
     thread_count = 1;
@@ -786,11 +797,32 @@ static bool blocks_equal(const BlockNode *a, const BlockNode *b,
                 a->length * sizeof(uint32_t)) == 0;
 }
 
+static bool ensure_ptr_capacity(BlockNode ***buffer, size_t *cap,
+                                size_t needed) {
+  if (*cap >= needed)
+    return true;
+  size_t new_cap = *cap ? *cap : 16;
+  while (new_cap < needed) {
+    if (new_cap > SIZE_MAX / 2)
+      return false;
+    new_cap *= 2;
+  }
+  BlockNode **next = realloc(*buffer, new_cap * sizeof(**buffer));
+  if (!next)
+    return false;
+  *buffer = next;
+  *cap = new_cap;
+  return true;
+}
+
 void deduplicate_level(BlockNode **candidates, size_t count,
-                       const uint32_t *text, BlockNode ***out_marked,
-                       size_t *out_marked_count) {
-  if (count == 0)
+                       const uint32_t *text, BlockNode **next_marked,
+                       size_t next_cap, size_t *out_marked_count) {
+  if (count == 0 || !next_marked || next_cap < count) {
+    if (out_marked_count)
+      *out_marked_count = 0;
     return;
+  }
 
   // 1. Sort to group identical hashes
   qsort(candidates, count, sizeof(BlockNode *), compare_nodes);
@@ -801,7 +833,6 @@ void deduplicate_level(BlockNode **candidates, size_t count,
 
   // Temporary array to hold marked nodes for the next iteration
   // We allocate worst-case size (all unique)
-  BlockNode **next_marked = malloc(count * sizeof(BlockNode *));
   size_t marked_idx = 0;
 
   // Process first element
@@ -842,7 +873,6 @@ void deduplicate_level(BlockNode **candidates, size_t count,
     }
   }
 
-  *out_marked = next_marked;
   *out_marked_count = marked_idx;
 }
 
@@ -855,7 +885,15 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
   BlockNode *root = create_node(arena, 0, len, 0, nullptr);
   root->is_marked = true;
 
-  BlockNode **current_marked = malloc(sizeof(BlockNode *));
+  BlockNode **current_marked = malloc(sizeof(*current_marked));
+  if (!current_marked)
+    return nullptr;
+  BlockNode **next_marked = nullptr;
+  BlockNode **candidates = nullptr;
+  size_t current_cap = 1;
+  size_t next_cap = 0;
+  size_t cand_cap = 0;
+
   current_marked[0] = root;
   size_t current_count = 1;
 
@@ -867,63 +905,72 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
     // 1. Generate Candidates (Partitioning)
     // First pass: count total children to allocate array
     size_t total_candidates = 0;
-    int divisor = (level == 1) ? s : tau;
+    size_t divisor = (size_t)((level == 1) ? s : tau);
+    if (divisor == 0)
+      divisor = 1;
 
     for (size_t i = 0; i < current_count; ++i) {
       BlockNode *p = current_marked[i];
-      if (p->length <= 1)
+      size_t max_len = p->length;
+      if (p->start_pos >= len)
+        continue;
+      if (p->start_pos + max_len > len)
+        max_len = len - p->start_pos;
+      if (max_len <= 1)
         continue; // Base case: leaf
 
-      size_t step = p->length / divisor;
+      size_t step = max_len / divisor;
       if (step == 0)
         step = 1;
 
-      // Calculate how many children this node will have
-      size_t num_children = 0;
-      for (size_t k = 0; k < (size_t)divisor; ++k) {
-        size_t cStart = p->start_pos + k * step;
-        if (cStart >= len)
-          break;
-        if (cStart >= p->start_pos + p->length)
-          break;
-        num_children++;
-      }
+      size_t num_children =
+          (step == 1) ? (max_len < divisor ? max_len : divisor) : divisor;
       total_candidates += num_children;
     }
 
     if (total_candidates == 0) {
-      free(current_marked);
       break;
     }
 
     // Allocation for flat array of candidates
-    BlockNode **candidates = malloc(total_candidates * sizeof(BlockNode *));
+    if (!ensure_ptr_capacity(&candidates, &cand_cap, total_candidates) ||
+        !ensure_ptr_capacity(&next_marked, &next_cap, total_candidates)) {
+      free(current_marked);
+      free(next_marked);
+      free(candidates);
+      return nullptr;
+    }
     size_t cand_idx = 0;
 
     // Second pass: Create children
     for (size_t i = 0; i < current_count; ++i) {
       BlockNode *p = current_marked[i];
-      if (p->length <= 1)
+      size_t max_len = p->length;
+      if (p->start_pos >= len)
+        continue;
+      if (p->start_pos + max_len > len)
+        max_len = len - p->start_pos;
+      if (max_len <= 1)
         continue;
 
-      size_t step = p->length / divisor;
+      size_t step = max_len / divisor;
       if (step == 0)
         step = 1;
 
+      size_t num_children =
+          (step == 1) ? (max_len < divisor ? max_len : divisor) : divisor;
+
       // Allocate children array for the parent in the arena
-      // We don't know exact size easily without recalculating,
-      // but for this demo we'll use a dynamic approach or just alloc what we
-      // need. Let's assume max children is 'divisor'.
-      p->children = arena_alloc(arena, divisor * sizeof(BlockNode *));
+      p->children = arena_alloc(arena, num_children * sizeof(BlockNode *));
       p->child_count = 0;
 
-      for (size_t k = 0; k < (size_t)divisor; ++k) {
+      for (size_t k = 0; k < num_children; ++k) {
         size_t cStart = p->start_pos + k * step;
         size_t cEnd = cStart + step;
 
         // Handle jagged end
-        if (k == (size_t)divisor - 1) {
-          cEnd = p->start_pos + p->length;
+        if (k == num_children - 1) {
+          cEnd = p->start_pos + max_len;
         }
 
         if (cStart >= len)
@@ -941,21 +988,28 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
       }
     }
 
-    free(current_marked); // Done with previous level list
-
     // 2. Parallel Hashing
+    if (cand_idx < total_candidates)
+      total_candidates = cand_idx;
     compute_hashes_parallel(candidates, total_candidates, text, len);
 
     // 3. Deduplication (Sort + Scan)
-    BlockNode **next_marked = nullptr;
     size_t next_count = 0;
-    deduplicate_level(candidates, total_candidates, text, &next_marked,
+    deduplicate_level(candidates, total_candidates, text, next_marked, next_cap,
                       &next_count);
 
-    free(candidates); // The array of pointers, not the nodes themselves
+    BlockNode **swap = current_marked;
     current_marked = next_marked;
+    next_marked = swap;
+    size_t swap_cap = current_cap;
+    current_cap = next_cap;
+    next_cap = swap_cap;
     current_count = next_count;
   }
+
+  free(current_marked);
+  free(next_marked);
+  free(candidates);
 
   // Caller owns the arena and should destroy it after the tree is no longer
   // needed.
