@@ -1,11 +1,12 @@
 #include "sentence_set.h"
-#include "ckdint_compat.h"
-#include "config.h"
-#include "hash_utils.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
+
+#include "ckdint_compat.h"
+#include "config.h"
+#include "hash_utils.h"
 
 typedef struct SentenceArenaBlock {
   uint8_t *data;

@@ -1,6 +1,5 @@
 #include "block_tree.h"
 
-#include "ckdint_compat.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -11,6 +10,7 @@
 
 #include "arena.h"
 #include "block_tree_asm_defs.h"
+#include "ckdint_compat.h"
 #include "config.h"
 #include "hash_pool.h"
 #include "node_sort.h"

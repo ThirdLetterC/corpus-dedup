@@ -1,14 +1,15 @@
 #include "sentence_splitter.h"
 
+#if defined(__AVX2__) || defined(__SSE2__)
+#include <immintrin.h>
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uchar.h>
 
-#if defined(__AVX2__) || defined(__SSE2__)
-#include <immintrin.h>
-#endif
 // --- Constants & Helpers ---
 
 static constexpr size_t k_init_capacity = 16;
