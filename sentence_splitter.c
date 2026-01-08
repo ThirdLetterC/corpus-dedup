@@ -16,10 +16,11 @@ static const size_t k_init_capacity = 16;
 
 /**
  * @brief Checks if a code point is a distinct CJK/Wide sentence terminator.
- * Includes: 。 (3002), ？ (FF1F), ！ (FF01)
+ * Includes: 。 (3002), ？ (FF1F), ！ (FF01), … (2026), ؟ (061F), ｡ (FF61)
  */
 static inline bool is_immediate_terminator(char32_t cp) {
-  return (cp == 0x3002 || cp == 0xFF1F || cp == 0xFF01);
+  return (cp == 0x3002 || cp == 0xFF1F || cp == 0xFF01 || cp == 0x2026 ||
+          cp == 0x061F || cp == 0xFF61);
 }
 
 /**
@@ -38,16 +39,127 @@ static inline bool is_basic_white_space(char32_t cp) {
   return false;
 }
 
-static inline bool is_ascii_white_space(unsigned char c) {
-  return c <= 0x20;
+static inline bool is_ascii_alpha(unsigned char c) {
+  unsigned char folded = (unsigned char)(c | 0x20);
+  return folded >= 'a' && folded <= 'z';
 }
 
-static inline const char *skip_ascii_white_space(const char *p,
-                                                 const char *end) {
-  while (p < end && (unsigned char)*p <= 32) {
-    p++;
+static inline bool is_ascii_lower(unsigned char c) {
+  return c >= 'a' && c <= 'z';
+}
+
+static inline unsigned char ascii_tolower(unsigned char c) {
+  if (c >= 'A' && c <= 'Z')
+    return (unsigned char)(c + 32);
+  return c;
+}
+
+static inline bool is_ascii_closer(unsigned char c) {
+  return (c == '"' || c == '\'' || c == ')' || c == ']' || c == '}');
+}
+
+static inline bool is_unicode_closer(char32_t cp) {
+  return (cp == 0x00BB || cp == 0x2019 || cp == 0x201D || cp == 0x300D ||
+          cp == 0x300F || cp == 0x3009 || cp == 0x300B || cp == 0x3011 ||
+          cp == 0x3015 || cp == 0x3017 || cp == 0x3019 || cp == 0x301B ||
+          cp == 0xFF09 || cp == 0xFF3D || cp == 0xFF5D);
+}
+
+static inline size_t decode_utf8(const unsigned char *p, size_t len,
+                                 char32_t *out_cp);
+
+static inline const char *skip_white_space(const char *p, const char *end) {
+  while (p < end) {
+    unsigned char c = (unsigned char)p[0];
+    if (c <= 0x20) {
+      p++;
+      continue;
+    }
+    if (c < 0x80)
+      return p;
+    char32_t cp;
+    size_t bytes =
+        decode_utf8((const unsigned char *)p, (size_t)(end - p), &cp);
+    if (bytes == 0)
+      return p;
+    if (is_basic_white_space(cp)) {
+      p += bytes;
+      continue;
+    }
+    return p;
   }
   return p;
+}
+
+static inline const char *skip_closing_punct(const char *p, const char *end) {
+  while (p < end) {
+    unsigned char c = (unsigned char)p[0];
+    if (c < 0x80) {
+      if (is_ascii_closer(c)) {
+        p++;
+        continue;
+      }
+      return p;
+    }
+    char32_t cp;
+    size_t bytes =
+        decode_utf8((const unsigned char *)p, (size_t)(end - p), &cp);
+    if (bytes == 0)
+      return p;
+    if (is_unicode_closer(cp)) {
+      p += bytes;
+      continue;
+    }
+    return p;
+  }
+  return p;
+}
+
+static inline bool is_common_abbrev(const char *start, size_t len) {
+  if (len == 2) {
+    unsigned char c0 = ascii_tolower((unsigned char)start[0]);
+    unsigned char c1 = ascii_tolower((unsigned char)start[1]);
+    if (!is_ascii_alpha(c0) || !is_ascii_alpha(c1))
+      return false;
+    return ((c0 == 'm' && c1 == 'r') || (c0 == 'm' && c1 == 's') ||
+            (c0 == 'd' && c1 == 'r') || (c0 == 'v' && c1 == 's') ||
+            (c0 == 'j' && c1 == 'r') || (c0 == 's' && c1 == 'r') ||
+            (c0 == 's' && c1 == 't') || (c0 == 'm' && c1 == 't'));
+  }
+  if (len == 3) {
+    unsigned char c0 = ascii_tolower((unsigned char)start[0]);
+    unsigned char c1 = ascii_tolower((unsigned char)start[1]);
+    unsigned char c2 = ascii_tolower((unsigned char)start[2]);
+    if (!is_ascii_alpha(c0) || !is_ascii_alpha(c1) || !is_ascii_alpha(c2))
+      return false;
+    return ((c0 == 'm' && c1 == 'r' && c2 == 's') ||
+            (c0 == 'e' && c1 == 't' && c2 == 'c'));
+  }
+  return false;
+}
+
+static inline bool should_block_split_on_dot(const char *sentence_start,
+                                             const char *dot_pos,
+                                             const char *next_non_space,
+                                             const char *end) {
+  if (next_non_space >= end)
+    return false;
+  size_t len = 0;
+  const char *p = dot_pos;
+  while (p > sentence_start) {
+    unsigned char c = (unsigned char)p[-1];
+    if (!is_ascii_alpha(c))
+      break;
+    len++;
+    if (len > 3)
+      break;
+    p--;
+  }
+  if (len == 0 || len > 3)
+    return false;
+  if (is_ascii_lower((unsigned char)next_non_space[0]))
+    return true;
+  return is_common_abbrev(dot_pos - len, len);
 }
 
 static inline size_t decode_utf8(const unsigned char *p, size_t len,
@@ -202,9 +314,9 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
   const char *sentence_start = text;
   const char *end = text + len;
 
-  char32_t current_cp, next_cp;
+  char32_t current_cp;
 
-  sentence_start = skip_ascii_white_space(sentence_start, end);
+  sentence_start = skip_white_space(sentence_start, end);
   cursor = sentence_start;
 
   // We iterate until the cursor hits the end
@@ -225,29 +337,26 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
       byte0 = (unsigned char)cursor[0];
       if (byte0 < 0x80) {
         const char *next_cursor = cursor + 1;
-        if (next_cursor >= end) {
+        const char *after_closers = skip_closing_punct(next_cursor, end);
+        const char *ws = skip_white_space(after_closers, end);
+        if (after_closers >= end) {
           split_here = true;
-        } else {
-          unsigned char next_byte = (unsigned char)next_cursor[0];
-          if (is_ascii_white_space(next_byte)) {
-            split_here = true;
-          } else if (next_byte >= 0x80) {
-            size_t next_bytes = decode_utf8(
-                (const unsigned char *)next_cursor,
-                (size_t)(end - next_cursor), &next_cp);
-            if (next_bytes == 0 || is_basic_white_space(next_cp)) {
+        } else if (ws > after_closers) {
+          if (byte0 == '.') {
+            if (!should_block_split_on_dot(sentence_start, cursor, ws, end))
               split_here = true;
-            }
+          } else {
+            split_here = true;
           }
         }
         bytes_read = 1;
         if (split_here) {
-          size_t len = (size_t)(next_cursor - sentence_start);
+          size_t len = (size_t)(after_closers - sentence_start);
           add_sentence(&list, sentence_start, len);
-          sentence_start = skip_ascii_white_space(next_cursor, end);
+          sentence_start = ws;
           cursor = sentence_start;
         } else {
-          cursor = next_cursor;
+          cursor = (ws > after_closers) ? ws : after_closers;
         }
         continue;
       }
@@ -271,8 +380,10 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
                                (size_t)(end - cursor), &current_cp);
 
       // Handle decoding errors or incomplete sequences
-      if (bytes_read == 0)
-        break; // Null terminator
+      if (bytes_read == 0) {
+        cursor++;
+        continue;
+      }
 
       if (is_immediate_terminator(current_cp)) {
         split_here = true;
@@ -283,12 +394,13 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
 
     // 3. Execute Split
     if (split_here) {
+      const char *after_closers = skip_closing_punct(next_cursor, end);
       // Length includes the terminator (current byte sequence)
-      size_t len = (size_t)(next_cursor - sentence_start);
+      size_t len = (size_t)(after_closers - sentence_start);
       add_sentence(&list, sentence_start, len);
 
       // Reset start for next sentence
-      sentence_start = skip_ascii_white_space(next_cursor, end);
+      sentence_start = skip_white_space(after_closers, end);
       cursor = sentence_start;
       continue;
     }
