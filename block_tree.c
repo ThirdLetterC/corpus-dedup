@@ -767,6 +767,69 @@ int compare_nodes(const void *a, const void *b) {
   return 0;
 }
 
+static void radix_pass_length(BlockNode **src, BlockNode **dst, size_t count,
+                              unsigned int shift) {
+  size_t buckets[256] = {0};
+  for (size_t i = 0; i < count; ++i) {
+    size_t key = src[i]->length;
+    buckets[(key >> shift) & 0xFF]++;
+  }
+  size_t sum = 0;
+  for (size_t i = 0; i < 256; ++i) {
+    size_t c = buckets[i];
+    buckets[i] = sum;
+    sum += c;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    size_t key = src[i]->length;
+    size_t idx = (key >> shift) & 0xFF;
+    dst[buckets[idx]++] = src[i];
+  }
+}
+
+static void radix_pass_block_id(BlockNode **src, BlockNode **dst, size_t count,
+                                unsigned int shift) {
+  size_t buckets[256] = {0};
+  for (size_t i = 0; i < count; ++i) {
+    uint64_t key = src[i]->block_id;
+    buckets[(key >> shift) & 0xFF]++;
+  }
+  size_t sum = 0;
+  for (size_t i = 0; i < 256; ++i) {
+    size_t c = buckets[i];
+    buckets[i] = sum;
+    sum += c;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    uint64_t key = src[i]->block_id;
+    size_t idx = (key >> shift) & 0xFF;
+    dst[buckets[idx]++] = src[i];
+  }
+}
+
+static void radix_sort_block_nodes(BlockNode **items, BlockNode **tmp,
+                                   size_t count) {
+  if (count <= 1)
+    return;
+  BlockNode **src = items;
+  BlockNode **dst = tmp;
+  for (size_t pass = 0; pass < sizeof(size_t); ++pass) {
+    radix_pass_length(src, dst, count, (unsigned int)(pass * 8));
+    BlockNode **swap = src;
+    src = dst;
+    dst = swap;
+  }
+  for (size_t pass = 0; pass < sizeof(uint64_t); ++pass) {
+    radix_pass_block_id(src, dst, count, (unsigned int)(pass * 8));
+    BlockNode **swap = src;
+    src = dst;
+    dst = swap;
+  }
+  if (src != items) {
+    memcpy(items, src, count * sizeof(*items));
+  }
+}
+
 // ==========================================
 // 5. Tree Construction Logic
 // ==========================================
@@ -824,8 +887,8 @@ void deduplicate_level(BlockNode **candidates, size_t count,
     return;
   }
 
-  // 1. Sort to group identical hashes
-  qsort(candidates, count, sizeof(BlockNode *), compare_nodes);
+  // 1. Sort to group identical hashes (and lengths) with lower overhead.
+  radix_sort_block_nodes(candidates, next_marked, count);
 
   // 2. Identification Scan
   // The first node in a group of identical hashes is the "Leader" (Marked).
@@ -844,7 +907,7 @@ void deduplicate_level(BlockNode **candidates, size_t count,
   for (size_t i = 1; i < count; ++i) {
     BlockNode *curr = candidates[i];
 
-    if (curr->block_id != leader->block_id) {
+    if (curr->block_id != leader->block_id || curr->length != leader->length) {
       // New hash group
       leader = curr;
       leader->is_marked = true;
