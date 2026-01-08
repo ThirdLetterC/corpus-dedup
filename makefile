@@ -13,7 +13,8 @@ BUILD_DIR_RELEASE_C := $(BUILD_DIR)/release_c
 COMMON_CMAKE_FLAGS := -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DUSE_ASM=$(USE_ASM)
 COMMON_CMAKE_FLAGS_NO_ASM := -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DUSE_ASM=OFF
 
-FORMAT_SOURCES := $(shell find . \( -path ./$(BUILD_DIR) -o -path ./out -o -path ./out2 -o -path ./data -o -path ./.git \) -prune -o \( -name '*.c' -o -name '*.h' \) -print)
+REPO_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+FORMAT_SOURCES := $(shell cd $(REPO_ROOT) && git ls-files '*.c' '*.h')
 
 .PHONY: release release_c debug fmt lint clean
 
@@ -30,7 +31,7 @@ debug:
 	$(CMAKE) --build $(BUILD_DIR_DEBUG) --config Debug
 
 fmt:
-	$(CLANG_FORMAT) -i $(FORMAT_SOURCES)
+	cd $(REPO_ROOT) && $(CLANG_FORMAT) -i $(FORMAT_SOURCES)
 
 lint: $(BUILD_DIR_DEBUG)/compile_commands.json
 	$(CLANG_TIDY) -p $(BUILD_DIR_DEBUG) $(FORMAT_SOURCES)
