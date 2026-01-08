@@ -39,7 +39,8 @@ const size_t FILE_BATCH_SIZE = 4096;
 const char *DUPLICATES_FILENAME = "duplicates.txt";
 const char *DEFAULT_MASK = "*.txt";
 const size_t SENTENCE_ARENA_BLOCK_SIZE = 1024 * 64;
-const size_t HASH_PARALLEL_THRESHOLD = 256;
+const size_t HASH_PARALLEL_BASE = 64;
+const size_t RADIX_SORT_MIN_COUNT = 64;
 
 // ==========================================
 // 2. Data Structures
@@ -1137,46 +1138,13 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
       break;
 
     // 1. Generate Candidates (Partitioning)
-    // First pass: count total children to allocate array
-    size_t total_candidates = 0;
     size_t divisor = (size_t)((level == 1) ? s : tau);
     if (divisor == 0)
       divisor = 1;
 
-    for (size_t i = 0; i < current_count; ++i) {
-      BlockNode *p = current_marked[i];
-      size_t max_len = p->length;
-      if (p->start_pos >= len)
-        continue;
-      if (p->start_pos + max_len > len)
-        max_len = len - p->start_pos;
-      if (max_len <= 1)
-        continue; // Base case: leaf
-
-      size_t step = max_len / divisor;
-      if (step == 0)
-        step = 1;
-
-      size_t num_children =
-          (step == 1) ? (max_len < divisor ? max_len : divisor) : divisor;
-      total_candidates += num_children;
-    }
-
-    if (total_candidates == 0) {
-      break;
-    }
-
-    // Allocation for flat array of candidates
-    if (!ensure_ptr_capacity(&candidates, &cand_cap, total_candidates) ||
-        !ensure_ptr_capacity(&next_marked, &next_cap, total_candidates)) {
-      free(current_marked);
-      free(next_marked);
-      free(candidates);
-      return nullptr;
-    }
     size_t cand_idx = 0;
 
-    // Second pass: Create children
+    // Create children and append to candidates
     for (size_t i = 0; i < current_count; ++i) {
       BlockNode *p = current_marked[i];
       size_t max_len = p->length;
@@ -1197,6 +1165,14 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
       // Allocate children array for the parent in the arena
       p->children = arena_alloc(arena, num_children * sizeof(BlockNode *));
       p->child_count = 0;
+
+      if (!ensure_ptr_capacity(&candidates, &cand_cap,
+                               cand_idx + num_children)) {
+        free(current_marked);
+        free(next_marked);
+        free(candidates);
+        return nullptr;
+      }
 
       for (size_t k = 0; k < num_children; ++k) {
         size_t cStart = p->start_pos + k * step;
@@ -1222,14 +1198,23 @@ BlockNode *build_block_tree(const uint32_t *text, size_t len, int s, int tau,
       }
     }
 
+    if (cand_idx == 0) {
+      break;
+    }
+
+    if (!ensure_ptr_capacity(&next_marked, &next_cap, cand_idx)) {
+      free(current_marked);
+      free(next_marked);
+      free(candidates);
+      return nullptr;
+    }
+
     // 2. Parallel Hashing
-    if (cand_idx < total_candidates)
-      total_candidates = cand_idx;
-    compute_hashes_parallel(candidates, total_candidates, text, len);
+    compute_hashes_parallel(candidates, cand_idx, text, len);
 
     // 3. Deduplication (Sort + Scan)
     size_t next_count = 0;
-    deduplicate_level(candidates, total_candidates, text, next_marked, next_cap,
+    deduplicate_level(candidates, cand_idx, text, next_marked, next_cap,
                       &next_count);
 
     BlockNode **swap = current_marked;
