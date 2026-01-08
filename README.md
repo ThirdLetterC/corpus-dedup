@@ -54,7 +54,10 @@ the pure C fallbacks are used (`WAVESORT_USE_ASM=0`, `HASH_WORKER_USE_ASM=0`,
 
 Runtime tuning:
 
-- `BLOCK_TREE_THREADS=8` overrides auto-detected thread count.
+- `DEDUP_THREADS=8` overrides auto-detected thread count for per-file dedup work
+  (block-tree hashing still uses `BLOCK_TREE_THREADS`).
+- `BLOCK_TREE_THREADS` defaults to 1 when unset; set explicitly to run the block
+  tree hash workers on more threads.
 - CLI modes:
   - Dedup: `./corpus_dedup <input_dir> <output_dir> [mask] [--write-duplicates] [--build-block-tree]`
   - Verify: `./corpus_dedup --verify <dedup_dir> [mask]`

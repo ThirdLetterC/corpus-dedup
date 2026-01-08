@@ -4,9 +4,12 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
+#include <unistd.h>
 
 #include "arena.h"
 #include "block_tree.h"
@@ -26,16 +29,74 @@ typedef struct {
   size_t byte_len;
 } FileItem;
 
+typedef struct {
+  char8_t *dedup_buffer;
+  size_t dedup_cap;
+  char8_t *norm_buffer;
+  size_t norm_cap;
+} DedupScratch;
+
+typedef struct {
+  atomic_size_t files_written;
+  atomic_size_t files_empty;
+  atomic_size_t unique_sentences;
+  atomic_size_t duplicate_sentences;
+  atomic_size_t errors;
+  atomic_size_t processed;
+  atomic_size_t bytes_processed;
+} BatchStats;
+
+static bool ensure_scratch(DedupScratch *scratch, size_t input_len) {
+  if (!scratch)
+    return false;
+
+  size_t needed_out = 0;
+  if (ckd_mul(&needed_out, input_len, (size_t)2) ||
+      ckd_add(&needed_out, needed_out, (size_t)1)) {
+    return false;
+  }
+  if (scratch->dedup_cap < needed_out) {
+    size_t alloc_size = 0;
+    if (ckd_mul(&alloc_size, needed_out, sizeof(char8_t)))
+      return false;
+    auto next = (char8_t *)realloc(scratch->dedup_buffer, alloc_size);
+    if (!next)
+      return false;
+    scratch->dedup_buffer = next;
+    scratch->dedup_cap = needed_out;
+  }
+
+  if (scratch->norm_cap < input_len) {
+    size_t alloc_size = 0;
+    if (ckd_mul(&alloc_size, input_len, sizeof(char8_t)))
+      return false;
+    auto next = (char8_t *)realloc(scratch->norm_buffer, alloc_size);
+    if (!next)
+      return false;
+    scratch->norm_buffer = next;
+    scratch->norm_cap = input_len;
+  }
+
+  return true;
+}
+
 static bool emit_sentence(const char8_t *data, size_t len, SentenceSet *seen,
-                          char8_t *norm_buf, size_t norm_cap, char8_t *out_buf,
-                          size_t *out_pos, size_t out_cap, size_t *out_unique,
-                          size_t *out_duplicates, FILE *duplicates_fp) {
+                          mtx_t *seen_lock, char8_t *norm_buf,
+                          size_t norm_cap, char8_t *out_buf, size_t *out_pos,
+                          size_t out_cap, size_t *out_unique,
+                          size_t *out_duplicates, FILE *duplicates_fp,
+                          mtx_t *duplicates_lock) {
   size_t norm_len = normalize_sentence(data, len, norm_buf, norm_cap);
   if (norm_len == 0)
     return true;
 
   bool inserted = false;
-  if (!sentence_set_insert(seen, norm_buf, norm_len, &inserted)) {
+  if (seen_lock)
+    mtx_lock(seen_lock);
+  bool inserted_ok = sentence_set_insert(seen, norm_buf, norm_len, &inserted);
+  if (seen_lock)
+    mtx_unlock(seen_lock);
+  if (!inserted_ok) {
     return false;
   }
 
@@ -53,22 +114,27 @@ static bool emit_sentence(const char8_t *data, size_t len, SentenceSet *seen,
   } else {
     (*out_duplicates)++;
     if (duplicates_fp) {
-      if (fwrite(norm_buf, 1, norm_len, duplicates_fp) != norm_len) {
+      if (duplicates_lock)
+        mtx_lock(duplicates_lock);
+      bool ok = fwrite(norm_buf, 1, norm_len, duplicates_fp) == norm_len &&
+                fputc('\n', duplicates_fp) != EOF;
+      if (duplicates_lock)
+        mtx_unlock(duplicates_lock);
+      if (!ok)
         return false;
-      }
-      if (fputc('\n', duplicates_fp) == EOF) {
-        return false;
-      }
     }
   }
   return true;
 }
 
 static bool deduplicate_sentences(const char8_t *input, size_t len,
-                                  SentenceSet *seen, char8_t **out,
+                                  SentenceSet *seen, mtx_t *seen_lock,
+                                  DedupScratch *scratch, char8_t **out,
                                   size_t *out_len, size_t *out_unique,
-                                  size_t *out_duplicates, FILE *duplicates_fp) {
-  if (!out || !out_len || !out_unique || !out_duplicates || !seen)
+                                  size_t *out_duplicates, FILE *duplicates_fp,
+                                  mtx_t *duplicates_lock) {
+  if (!out || !out_len || !out_unique || !out_duplicates || !seen ||
+      !scratch)
     return false;
   *out = nullptr;
   *out_len = 0;
@@ -78,18 +144,7 @@ static bool deduplicate_sentences(const char8_t *input, size_t len,
   if (!input || len == 0)
     return true;
 
-  size_t out_cap = 0;
-  if (ckd_mul(&out_cap, len, (size_t)2) ||
-      ckd_add(&out_cap, out_cap, (size_t)1)) {
-    return false;
-  }
-
-  auto buffer = (char8_t *)calloc(out_cap, sizeof(char8_t));
-  if (!buffer)
-    return false;
-  auto norm_buf = (char8_t *)calloc(len, sizeof(char8_t));
-  if (!norm_buf) {
-    free(buffer);
+  if (!ensure_scratch(scratch, len)) {
     return false;
   }
 
@@ -99,26 +154,22 @@ static bool deduplicate_sentences(const char8_t *input, size_t len,
   for (size_t i = 0; i < sentences.count; ++i) {
     const char8_t *sentence = sentences.sentences[i].start;
     size_t sentence_len = sentences.sentences[i].len;
-    if (!emit_sentence(sentence, sentence_len, seen, norm_buf, len, buffer,
-                       &out_pos, out_cap, out_unique, out_duplicates,
-                       duplicates_fp)) {
+    if (!emit_sentence(sentence, sentence_len, seen, seen_lock,
+                       scratch->norm_buffer, scratch->norm_cap,
+                       scratch->dedup_buffer, &out_pos, scratch->dedup_cap,
+                       out_unique, out_duplicates, duplicates_fp,
+                       duplicates_lock)) {
       free_sentence_list(&sentences);
-      free(norm_buf);
-      free(buffer);
       return false;
     }
   }
 
   free_sentence_list(&sentences);
 
-  if (out_pos == 0) {
-    free(norm_buf);
-    free(buffer);
+  if (out_pos == 0)
     return true;
-  }
 
-  free(norm_buf);
-  *out = buffer;
+  *out = scratch->dedup_buffer;
   *out_len = out_pos;
   return true;
 }
@@ -172,117 +223,228 @@ static bool process_text(const char *label, const char8_t *raw_text,
   return errors == 0;
 }
 
-static bool process_batch(FileItem *batch, size_t batch_count,
-                          const char *output_dir, SentenceSet *seen,
-                          FILE *duplicates_fp, bool build_tree,
-                          size_t *files_written, size_t *files_empty,
-                          size_t *unique_sentences, size_t *duplicate_sentences,
-                          size_t *errors, size_t *processed,
-                          size_t *bytes_processed, size_t total_files,
-                          double start_time) {
-  if (!batch || batch_count == 0)
-    return true;
+static size_t parse_thread_env() {
+  constexpr const char *ENV_NAME = "DEDUP_THREADS";
+  const char *env = getenv(ENV_NAME);
+  if (!env || !*env)
+    return 0;
+  char *end = nullptr;
+  long val = strtol(env, &end, 10);
+  if (end == env || val <= 0 || val > 1024)
+    return 0;
+  return (size_t)val;
+}
 
-  for (size_t i = 0; i < batch_count; ++i) {
-    batch[i].raw_text = nullptr;
-    batch[i].byte_len = 0;
-    if (!read_file_bytes(batch[i].input_path, &batch[i].raw_text,
-                         &batch[i].byte_len)) {
-      (*errors)++;
-    }
+static size_t detect_thread_count() {
+  static size_t cached = 0;
+  if (cached != 0)
+    return cached;
+  size_t env_threads = parse_thread_env();
+  if (env_threads > 0) {
+    cached = env_threads;
+    return cached;
   }
+#if defined(_SC_NPROCESSORS_ONLN)
+  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  if (n > 0) {
+    cached = (size_t)n;
+    return cached;
+  }
+#endif
+  cached = THREAD_COUNT_FALLBACK;
+  if (cached == 0)
+    cached = 1;
+  return cached;
+}
 
-  for (size_t i = 0; i < batch_count; ++i) {
-    FileItem *item = &batch[i];
-    if (!item->raw_text) {
+typedef struct {
+  FileItem *batch;
+  size_t batch_count;
+  const char *output_dir;
+  SentenceSet *seen;
+  mtx_t *seen_lock;
+  FILE *duplicates_fp;
+  mtx_t *duplicates_lock;
+  bool build_tree;
+  atomic_size_t next_index;
+  BatchStats *stats;
+  size_t total_files;
+  double start_time;
+  mtx_t *progress_lock;
+  mtx_t *tree_lock;
+} WorkerContext;
+
+static int batch_worker(void *arg) {
+  auto ctx = (WorkerContext *)arg;
+  DedupScratch scratch = {0};
+
+  for (;;) {
+    size_t idx = atomic_fetch_add_explicit(&ctx->next_index, 1, memory_order_relaxed);
+    if (idx >= ctx->batch_count)
+      break;
+
+    FileItem *item = &ctx->batch[idx];
+    size_t processed_bytes = 0;
+
+    item->raw_text = nullptr;
+    item->byte_len = 0;
+    if (!read_file_bytes(item->input_path, &item->raw_text, &item->byte_len)) {
+      atomic_fetch_add_explicit(&ctx->stats->errors, 1, memory_order_relaxed);
       free(item->name);
       free(item->input_path);
-      if (processed) {
-        (*processed)++;
-        render_progress(*processed, total_files,
-                        bytes_processed ? *bytes_processed : 0, start_time);
-      }
-      continue;
+      goto finish_file;
     }
+    processed_bytes = item->byte_len;
+
+    if (ctx->seen_lock)
+      mtx_lock(ctx->seen_lock);
+    sentence_set_reserve_for_bytes(ctx->seen, item->byte_len);
+    if (ctx->seen_lock)
+      mtx_unlock(ctx->seen_lock);
 
     char8_t *deduped = nullptr;
     size_t deduped_len = 0;
     size_t file_unique = 0;
     size_t file_duplicates = 0;
-    sentence_set_reserve_for_bytes(seen, item->byte_len);
-    if (!deduplicate_sentences(item->raw_text, item->byte_len, seen, &deduped,
-                               &deduped_len, &file_unique, &file_duplicates,
-                               duplicates_fp)) {
+
+    if (!deduplicate_sentences(item->raw_text, item->byte_len, ctx->seen,
+                               ctx->seen_lock, &scratch, &deduped, &deduped_len,
+                               &file_unique, &file_duplicates, ctx->duplicates_fp,
+                               ctx->duplicates_lock)) {
       fprintf(stderr, "Failed to deduplicate content for: %s\n", item->name);
-      (*errors)++;
+      atomic_fetch_add_explicit(&ctx->stats->errors, 1, memory_order_relaxed);
       free(item->raw_text);
       free(item->name);
       free(item->input_path);
-      for (size_t j = i + 1; j < batch_count; ++j) {
-        free(batch[j].raw_text);
-        free(batch[j].name);
-        free(batch[j].input_path);
-      }
-      free(deduped);
-      return false;
+      goto finish_file;
     }
-    *unique_sentences += file_unique;
-    *duplicate_sentences += file_duplicates;
+
+    atomic_fetch_add_explicit(&ctx->stats->unique_sentences, file_unique,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&ctx->stats->duplicate_sentences, file_duplicates,
+                              memory_order_relaxed);
 
     if (deduped_len == 0) {
-      (*files_empty)++;
-      free(deduped);
+      atomic_fetch_add_explicit(&ctx->stats->files_empty, 1, memory_order_relaxed);
       free(item->raw_text);
       free(item->name);
       free(item->input_path);
-      continue;
+      goto finish_file;
     }
 
-    char *output_path = join_path(output_dir, item->name);
+    char *output_path = join_path(ctx->output_dir, item->name);
     if (!output_path) {
       fprintf(stderr, "Failed to allocate output path for: %s\n", item->name);
-      (*errors)++;
-      free(deduped);
+      atomic_fetch_add_explicit(&ctx->stats->errors, 1, memory_order_relaxed);
       free(item->raw_text);
       free(item->name);
       free(item->input_path);
-      continue;
+      goto finish_file;
     }
 
     if (!write_file_bytes(output_path, deduped, deduped_len)) {
-      (*errors)++;
+      atomic_fetch_add_explicit(&ctx->stats->errors, 1, memory_order_relaxed);
       free(output_path);
-      free(deduped);
       free(item->raw_text);
       free(item->name);
       free(item->input_path);
-      continue;
+      goto finish_file;
     }
 
-    (*files_written)++;
+    atomic_fetch_add_explicit(&ctx->stats->files_written, 1, memory_order_relaxed);
 
-    if (build_tree) {
-      if (!process_text(item->name, deduped, deduped_len, false)) {
-        (*errors)++;
+    if (ctx->build_tree) {
+      if (ctx->tree_lock)
+        mtx_lock(ctx->tree_lock);
+      bool ok = process_text(item->name, deduped, deduped_len, false);
+      if (ctx->tree_lock)
+        mtx_unlock(ctx->tree_lock);
+      if (!ok) {
+        atomic_fetch_add_explicit(&ctx->stats->errors, 1, memory_order_relaxed);
       }
     }
 
     free(output_path);
-    free(deduped);
     free(item->raw_text);
     free(item->name);
     free(item->input_path);
-    if (processed) {
-      if (bytes_processed) {
-        *bytes_processed += item->byte_len;
-      }
-      (*processed)++;
-      render_progress(*processed, total_files,
-                      bytes_processed ? *bytes_processed : 0, start_time);
+
+  finish_file:
+    if (processed_bytes > 0) {
+      atomic_fetch_add_explicit(&ctx->stats->bytes_processed, processed_bytes,
+                                memory_order_relaxed);
+    }
+    size_t processed =
+        atomic_fetch_add_explicit(&ctx->stats->processed, 1, memory_order_relaxed) + 1;
+    if (ctx->progress_lock) {
+      mtx_lock(ctx->progress_lock);
+      size_t current_bytes =
+          atomic_load_explicit(&ctx->stats->bytes_processed, memory_order_relaxed);
+      render_progress(processed, ctx->total_files, current_bytes, ctx->start_time);
+      mtx_unlock(ctx->progress_lock);
     }
   }
 
-  return true;
+  free(scratch.dedup_buffer);
+  free(scratch.norm_buffer);
+  return 0;
+}
+
+static bool process_batch(FileItem *batch, size_t batch_count,
+                          const char *output_dir, SentenceSet *seen,
+                          mtx_t *seen_lock, FILE *duplicates_fp,
+                          mtx_t *duplicates_lock, bool build_tree,
+                          BatchStats *stats, size_t total_files,
+                          double start_time, mtx_t *progress_lock,
+                          mtx_t *tree_lock) {
+  if (!batch || batch_count == 0)
+    return true;
+
+  size_t worker_count = detect_thread_count();
+  if (worker_count == 0)
+    worker_count = 1;
+  if (worker_count > batch_count)
+    worker_count = batch_count;
+
+  WorkerContext ctx = {.batch = batch,
+                       .batch_count = batch_count,
+                       .output_dir = output_dir,
+                       .seen = seen,
+                       .seen_lock = seen_lock,
+                       .duplicates_fp = duplicates_fp,
+                       .duplicates_lock = duplicates_lock,
+                       .build_tree = build_tree,
+                       .stats = stats,
+                       .total_files = total_files,
+                       .start_time = start_time,
+                       .progress_lock = progress_lock,
+                       .tree_lock = tree_lock};
+  atomic_init(&ctx.next_index, 0);
+
+  auto threads = (thrd_t *)calloc(worker_count, sizeof(thrd_t));
+  if (!threads) {
+    return batch_worker(&ctx) == 0;
+  }
+
+  size_t launched = 0;
+  for (; launched < worker_count; ++launched) {
+    if (thrd_create(&threads[launched], batch_worker, &ctx) != thrd_success) {
+      atomic_fetch_add_explicit(&stats->errors, 1, memory_order_relaxed);
+      break;
+    }
+  }
+
+  if (launched == 0) {
+    free(threads);
+    return batch_worker(&ctx) == 0;
+  }
+
+  for (size_t i = 0; i < launched; ++i) {
+    thrd_join(threads[i], nullptr);
+  }
+
+  free(threads);
+  return launched > 0;
 }
 
 int run_dedup(int argc, char **argv) {
@@ -360,10 +522,6 @@ int run_dedup(int argc, char **argv) {
   }
 
   size_t matched = 0;
-  size_t files_written = 0;
-  size_t files_empty = 0;
-  size_t unique_sentences = 0;
-  size_t duplicate_sentences = 0;
   size_t errors = 0;
   bool abort_scan = false;
   FILE *duplicates_fp = nullptr;
@@ -380,6 +538,17 @@ int run_dedup(int argc, char **argv) {
     return 1;
   }
 
+  mtx_t seen_lock;
+  if (mtx_init(&seen_lock, mtx_plain) != thrd_success) {
+    fprintf(stderr, "Failed to initialize mutex.\n");
+    sentence_set_destroy(&seen);
+    closedir(dir);
+    return 1;
+  }
+
+  mtx_t duplicates_lock;
+  bool duplicates_lock_init = false;
+
   if (write_duplicates) {
     duplicates_path = join_path(output_dir, DUPLICATES_FILENAME);
     if (!duplicates_path) {
@@ -393,9 +562,20 @@ int run_dedup(int argc, char **argv) {
       fprintf(stderr, "Failed to open duplicates file: %s\n", duplicates_path);
       free(duplicates_path);
       sentence_set_destroy(&seen);
+      mtx_destroy(&seen_lock);
       closedir(dir);
       return 1;
     }
+    if (mtx_init(&duplicates_lock, mtx_plain) != thrd_success) {
+      fprintf(stderr, "Failed to initialize duplicates mutex.\n");
+      fclose(duplicates_fp);
+      free(duplicates_path);
+      sentence_set_destroy(&seen);
+      mtx_destroy(&seen_lock);
+      closedir(dir);
+      return 1;
+    }
+    duplicates_lock_init = true;
   }
 
   struct dirent *entry;
@@ -464,14 +644,39 @@ int run_dedup(int argc, char **argv) {
 
   closedir(dir);
 
+  BatchStats stats = {0};
+  atomic_init(&stats.files_written, 0);
+  atomic_init(&stats.files_empty, 0);
+  atomic_init(&stats.unique_sentences, 0);
+  atomic_init(&stats.duplicate_sentences, 0);
+  atomic_init(&stats.errors, 0);
+  atomic_init(&stats.processed, 0);
+  atomic_init(&stats.bytes_processed, 0);
+
+  mtx_t progress_lock;
+  bool progress_lock_init = false;
+  if (mtx_init(&progress_lock, mtx_plain) != thrd_success) {
+    fprintf(stderr, "Failed to initialize progress mutex.\n");
+    abort_scan = true;
+  } else {
+    progress_lock_init = true;
+  }
+
+  mtx_t tree_lock;
+  bool tree_lock_init = false;
+  if (mtx_init(&tree_lock, mtx_plain) != thrd_success) {
+    fprintf(stderr, "Failed to initialize tree mutex.\n");
+    abort_scan = true;
+  } else {
+    tree_lock_init = true;
+  }
+
   if (!abort_scan && items_count > 0) {
     FileItem *batch = calloc(FILE_BATCH_SIZE, sizeof(*batch));
     if (!batch) {
       fprintf(stderr, "Failed to allocate file batch.\n");
       abort_scan = true;
     } else {
-      size_t processed = 0;
-      size_t bytes_processed = 0;
       double start_time = now_seconds();
       render_progress(0, items_count, 0, start_time);
 
@@ -486,11 +691,12 @@ int run_dedup(int argc, char **argv) {
           items[i + j].input_path = nullptr;
         }
 
-        if (!process_batch(batch, batch_count, output_dir, &seen, duplicates_fp,
-                           build_block_tree_flag, &files_written, &files_empty,
-                           &unique_sentences, &duplicate_sentences, &errors,
-                           &processed, &bytes_processed, items_count,
-                           start_time)) {
+        if (!process_batch(
+                batch, batch_count, output_dir, &seen, &seen_lock, duplicates_fp,
+                duplicates_lock_init ? &duplicates_lock : nullptr,
+                build_block_tree_flag, &stats, items_count, start_time,
+                progress_lock_init ? &progress_lock : nullptr,
+                tree_lock_init ? &tree_lock : nullptr)) {
           abort_scan = true;
           break;
         }
@@ -510,6 +716,16 @@ int run_dedup(int argc, char **argv) {
   }
   free(items);
   sentence_set_destroy(&seen);
+  mtx_destroy(&seen_lock);
+  if (duplicates_lock_init) {
+    mtx_destroy(&duplicates_lock);
+  }
+  if (progress_lock_init) {
+    mtx_destroy(&progress_lock);
+  }
+  if (tree_lock_init) {
+    mtx_destroy(&tree_lock);
+  }
 
   if (duplicates_fp) {
     if (fclose(duplicates_fp) != 0) {
@@ -528,6 +744,17 @@ int run_dedup(int argc, char **argv) {
   if (elapsed < 0.0)
     elapsed = 0.0;
   double elapsed_min = elapsed / 60.0;
+  size_t files_written =
+      atomic_load_explicit(&stats.files_written, memory_order_relaxed);
+  size_t files_empty =
+      atomic_load_explicit(&stats.files_empty, memory_order_relaxed);
+  size_t unique_sentences =
+      atomic_load_explicit(&stats.unique_sentences, memory_order_relaxed);
+  size_t duplicate_sentences =
+      atomic_load_explicit(&stats.duplicate_sentences, memory_order_relaxed);
+  size_t worker_errors =
+      atomic_load_explicit(&stats.errors, memory_order_relaxed);
+  size_t total_errors = errors + worker_errors;
   size_t total_sentences = unique_sentences + duplicate_sentences;
   double duplicate_pct =
       total_sentences == 0
@@ -538,6 +765,6 @@ int run_dedup(int argc, char **argv) {
          "sentences %zu, "
          "duplicate sentences %zu (%.2f%%), errors %zu, elapsed %.2f min\n",
          matched, files_written, files_empty, unique_sentences,
-         duplicate_sentences, duplicate_pct, errors, elapsed_min);
-  return errors == 0 ? 0 : 1;
+         duplicate_sentences, duplicate_pct, total_errors, elapsed_min);
+  return total_errors == 0 ? 0 : 1;
 }

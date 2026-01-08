@@ -37,15 +37,16 @@ static size_t parse_thread_env() {
 }
 
 static size_t detect_thread_count() {
+  static size_t cached = 0;
+  if (cached != 0)
+    return cached;
   size_t env_threads = parse_thread_env();
-  if (env_threads > 0)
-    return env_threads;
-#if defined(_SC_NPROCESSORS_ONLN)
-  long n = sysconf(_SC_NPROCESSORS_ONLN);
-  if (n > 0)
-    return (size_t)n;
-#endif
-  return THREAD_COUNT_FALLBACK;
+  if (env_threads > 0) {
+    cached = env_threads;
+    return cached;
+  }
+  cached = 1;
+  return cached;
 }
 
 #if HASH_WORKER_USE_ASM
@@ -124,6 +125,36 @@ int hash_worker(void *arg) {
 }
 #endif
 
+static ThreadContext *g_ctx_cache = nullptr;
+static size_t g_ctx_cache_cap = 0;
+static bool g_ctx_cache_registered = false;
+
+static void free_ctx_cache(void) {
+  free(g_ctx_cache);
+  g_ctx_cache = nullptr;
+  g_ctx_cache_cap = 0;
+}
+
+static ThreadContext *ctx_buffer_acquire(size_t count) {
+  if (count == 0)
+    return nullptr;
+  if (g_ctx_cache_cap < count) {
+    size_t alloc_size = 0;
+    if (ckd_mul(&alloc_size, count, sizeof(ThreadContext)))
+      return nullptr;
+    ThreadContext *next = realloc(g_ctx_cache, alloc_size);
+    if (!next)
+      return nullptr;
+    g_ctx_cache = next;
+    g_ctx_cache_cap = count;
+    if (!g_ctx_cache_registered) {
+      atexit(free_ctx_cache);
+      g_ctx_cache_registered = true;
+    }
+  }
+  return g_ctx_cache;
+}
+
 void compute_hashes_parallel(BlockNode **candidates, size_t count,
                              const uint32_t *text, size_t len) {
   if (count == 0)
@@ -170,7 +201,7 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
     active = count;
   size_t chunk_size = (count + active - 1) / active;
 
-  auto ctxs = (ThreadContext *)calloc(active, sizeof(ThreadContext));
+  ThreadContext *ctxs = ctx_buffer_acquire(active);
   if (!ctxs) {
     ThreadContext ctx = {.nodes = candidates,
                          .start_idx = 0,
