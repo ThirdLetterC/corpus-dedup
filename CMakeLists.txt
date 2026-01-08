@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 project(block_tree C)
+if(POLICY CMP0069)
+  cmake_policy(SET CMP0069 NEW)
+endif()
 
 # Force Clang as the C compiler.
 set(CMAKE_C_COMPILER clang)
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 
 option(USE_ASM "Enable NASM/asm fast paths" ON)
 set(HASH_UNROLL 8 CACHE STRING "Unroll factor for hash worker asm (4 or 8)")
@@ -103,9 +109,16 @@ else()
 endif()
 
 target_compile_options(corpus_dedup PRIVATE
-  $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+  $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native -fomit-frame-pointer>
   $<$<CONFIG:Debug>:-O0 -g -fsanitize=address,undefined,leak>
 )
 target_link_options(corpus_dedup PRIVATE
   $<$<CONFIG:Debug>:-fsanitize=address,undefined,leak>
 )
+
+if(ipo_supported)
+  set_property(TARGET corpus_dedup PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE
+                                               TRUE)
+else()
+  message(STATUS "IPO/LTO not available: ${ipo_error}")
+endif()

@@ -90,6 +90,7 @@ hash_worker:
   pop r12
   pop rbx
   ret
+.section .note.GNU-stack,"",@progbits
 .att_syntax prefix
 #else
 .text
@@ -168,6 +169,7 @@ hash_worker:
   pop r12
   pop rbx
   ret
+.section .note.GNU-stack,"",@progbits
 .att_syntax prefix
 #endif
 #endif

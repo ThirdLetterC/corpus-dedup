@@ -26,6 +26,12 @@ static constexpr uint64_t HASH_MULT_POW3 = (uint64_t)HASH_MULT_POW3_IMM;
 static constexpr uint64_t HASH_MULT_POW4 = (uint64_t)HASH_MULT_POW4_IMM;
 #endif
 
+#if !HASH_WORKER_USE_ASM
+static const uint64_t *g_prefix_table = nullptr;
+static const uint64_t *g_pow_table = nullptr;
+static size_t g_prefix_size = 0;
+#endif
+
 static size_t parse_thread_env() {
   const char *env = getenv("BLOCK_TREE_THREADS");
   if (!env || !*env)
@@ -143,11 +149,6 @@ int hash_worker(void *arg) {
 static ThreadContext *g_ctx_cache = nullptr;
 static size_t g_ctx_cache_cap = 0;
 static bool g_ctx_cache_registered = false;
-#if !HASH_WORKER_USE_ASM
-static const uint64_t *g_prefix_table = nullptr;
-static const uint64_t *g_pow_table = nullptr;
-static size_t g_prefix_size = 0;
-#endif
 
 static void free_ctx_cache(void) {
   free(g_ctx_cache);

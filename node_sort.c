@@ -364,7 +364,8 @@ static void wavesort_nodes_c(BlockNode **restrict arr, size_t n) {
   wavesort_upwave(arr, 0, n - 1);
 }
 
-static void wavesort_block_nodes(BlockNode **items, BlockNode **tmp,
+static void wavesort_block_nodes(BlockNode **items,
+                                 [[maybe_unused]] BlockNode **tmp,
                                  size_t count) {
   if (!items || count < 2) {
     return;

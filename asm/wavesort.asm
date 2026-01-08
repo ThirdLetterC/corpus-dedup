@@ -138,10 +138,6 @@ block_swap_sr:
 
     align 16
 .sr_avx_unrolled_loop:
-    ; Loop Guard: check if j + 16 <= p
-    lea     rax, [rdx + 16]
-    cmp     rax, rcx
-    ja      .sr_check_single_vec
 
     ; UNROLLED BLOCK 1 (First 8 elements)
     ; 1. Load 8 elements from arr[j] -> YMM0
@@ -170,7 +166,9 @@ block_swap_sr:
     ; Increment indices by 16
     add     rsi, 16
     add     rdx, 16
-    jmp     .sr_avx_unrolled_loop
+    lea     rax, [rdx + 16]
+    cmp     rax, rcx
+    jbe     .sr_avx_unrolled_loop
 
 .sr_check_single_vec:
     ; Check if we can process remaining 8 elements
@@ -211,6 +209,7 @@ block_swap_sr:
     
     ; arr[j] = tmp;
     mov     [rdi + rdx*4], r8d
+    vzeroupper
     ret
 
 ; ==============================================================================
@@ -485,6 +484,7 @@ partition:
     jmp     .part_loop
 
 .part_done:
+    vzeroupper
     ret
 
 ; ==============================================================================
@@ -756,3 +756,5 @@ wave_sort:
 
 .ws_done:
     ret
+
+section .note.GNU-stack noalloc noexec nowrite progbits

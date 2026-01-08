@@ -7,22 +7,40 @@
 .type radix_histogram_block_id_asm,@function
 radix_histogram_block_id_asm:
   test rsi, rsi
-  jz 1f
+  jz .Ldone
+
   mov r8, rcx
   mov ecx, edx
-  xor rax, rax
-0:
-  mov r9, qword ptr [rdi + rax*8]
-  mov r10, qword ptr [r9 + RADIX_NODE_BLOCK_ID_OFFSET]
-  shr r10, cl
-  and r10, 0xFF
-  lea r11, [r8 + r10*8]
-  add qword ptr [r11], 1
-  inc rax
-  cmp rax, rsi
-  jb 0b
-1:
+  lea r10, [rdi + rsi*8]
+  mov r9, rdi
+
+  .p2align 4
+.Lloop:
+  cmp r9, r10
+  jae .Ldone
+
+  mov rax, qword ptr [r9]
+  mov r11, qword ptr [rax + RADIX_NODE_BLOCK_ID_OFFSET]
+  shr r11, cl
+  and r11, 0xFF
+  add qword ptr [r8 + r11*8], 1
+
+  add r9, 8
+  cmp r9, r10
+  jae .Ldone
+
+  mov rax, qword ptr [r9]
+  mov r11, qword ptr [rax + RADIX_NODE_BLOCK_ID_OFFSET]
+  shr r11, cl
+  and r11, 0xFF
+  add qword ptr [r8 + r11*8], 1
+
+  add r9, 8
+  jmp .Lloop
+
+.Ldone:
   ret
 .size radix_histogram_block_id_asm, .-radix_histogram_block_id_asm
+.section .note.GNU-stack,"",@progbits
 .att_syntax prefix
 #endif
