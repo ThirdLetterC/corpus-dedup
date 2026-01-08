@@ -1937,6 +1937,40 @@ static double now_seconds(void) {
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+static uint64_t now_ns(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0;
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void print_duration_ns(uint64_t ns) {
+  if (ns < 1000ull) {
+    printf("%" PRIu64 " ns", ns);
+    return;
+  }
+  if (ns < 1000ull * 1000ull) {
+    printf("%.3f us", (double)ns / 1e3);
+    return;
+  }
+  if (ns < 1000ull * 1000ull * 1000ull) {
+    printf("%.3f ms", (double)ns / 1e6);
+    return;
+  }
+  double seconds = (double)ns / 1e9;
+  if (seconds < 60.0) {
+    printf("%.3f s", seconds);
+    return;
+  }
+  double minutes = seconds / 60.0;
+  if (minutes < 60.0) {
+    printf("%.2f min", minutes);
+    return;
+  }
+  double hours = minutes / 60.0;
+  printf("%.2f h", hours);
+}
+
 static void render_progress(size_t done, size_t total, size_t bytes_done,
                             double start_time) {
   const int bar_width = 30;
@@ -2823,9 +2857,13 @@ static int run_search(const char *prog, int argc, char **argv) {
     }
 
     size_t files_with_hits = 0;
+    uint64_t search_start = now_ns();
     size_t total_hits = search_global_for_query(
         root, files, files_count, global_text, global_len, query, query_len,
         prefix, pow, &files_with_hits);
+    uint64_t search_end = now_ns();
+    uint64_t search_elapsed =
+        (search_end >= search_start) ? (search_end - search_start) : 0;
 
     if (total_hits == 0) {
       printf("No matches found.\n");
@@ -2833,6 +2871,9 @@ static int run_search(const char *prog, int argc, char **argv) {
       printf("Found %zu match(es) in %zu file(s).\n", total_hits,
              files_with_hits);
     }
+    printf("Search time: ");
+    print_duration_ns(search_elapsed);
+    printf("\n");
     free(query);
   }
 

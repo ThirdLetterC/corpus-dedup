@@ -32,12 +32,17 @@ Block Tree construction (per file):
 ASM build (x86_64, clang + nasm):
 
 ```sh
+# 1) Assemble wavesort.
 nasm -f elf64 -O3 wavesort.asm -o wavesort.o
+
+# 2) Compile the asm helpers (clang runs the preprocessor).
 clang -x assembler-with-cpp -c hash_worker.asm -o hash_worker.o
 clang -x assembler-with-cpp -c radix_histogram_length.asm -o radix_histogram_length.o
 clang -x assembler-with-cpp -c radix_scatter_length.asm -o radix_scatter_length.o
 clang -x assembler-with-cpp -c radix_histogram_block_id.asm -o radix_histogram_block_id.o
 clang -x assembler-with-cpp -c radix_scatter_block_id.asm -o radix_scatter_block_id.o
+
+# 3) Compile + link the C sources with the asm objects.
 clang -std=c2x -O3 -pthread block_tree.c sentence_splitter.c \
   hash_worker.o radix_histogram_length.o radix_scatter_length.o \
   radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o block_tree
