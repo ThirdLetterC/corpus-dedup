@@ -77,6 +77,33 @@ static inline const char *skip_white_space(const char *p, const char *end) {
     }
     if (c < 0x80)
       return p;
+    if (c == 0xC2) {
+      if (p + 1 < end && (unsigned char)p[1] == 0xA0) {
+        p += 2;
+        continue;
+      }
+    }
+    if (c == 0xE3) {
+      if (p + 2 < end && (unsigned char)p[1] == 0x80 &&
+          (unsigned char)p[2] == 0x80) {
+        p += 3;
+        continue;
+      }
+    }
+    if (c == 0xE2 && p + 2 < end) {
+      unsigned char c1 = (unsigned char)p[1];
+      unsigned char c2 = (unsigned char)p[2];
+      if (c1 == 0x80 &&
+          ((c2 >= 0x80 && c2 <= 0x8A) || c2 == 0xA8 || c2 == 0xA9 ||
+           c2 == 0xAF)) {
+        p += 3;
+        continue;
+      }
+      if (c1 == 0x81 && c2 == 0x9F) {
+        p += 3;
+        continue;
+      }
+    }
     char32_t cp;
     size_t bytes =
         decode_utf8((const unsigned char *)p, (size_t)(end - p), &cp);
@@ -336,8 +363,14 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
       cursor += offset;
       byte0 = (unsigned char)cursor[0];
       if (byte0 < 0x80) {
-        const char *next_cursor = cursor + 1;
-        const char *after_closers = skip_closing_punct(next_cursor, end);
+        const char *term_end = cursor + 1;
+        if (byte0 == '.' || byte0 == '!' || byte0 == '?') {
+          while (term_end < end &&
+                 (unsigned char)term_end[0] == byte0) {
+            term_end++;
+          }
+        }
+        const char *after_closers = skip_closing_punct(term_end, end);
         const char *ws = skip_white_space(after_closers, end);
         if (after_closers >= end) {
           split_here = true;
