@@ -60,10 +60,29 @@ Runtime tuning:
   (block-tree hashing still uses `BLOCK_TREE_THREADS`).
 - `BLOCK_TREE_THREADS` defaults to 1 when unset; set explicitly to run the block
   tree hash workers on more threads.
-- CLI modes:
-- Dedup: `./corpus_dedup <input_dir> <output_dir> [mask] [--dedup-mode <sentence|line|paragraph|document>] [--write-duplicates] [--build-block-tree]`
-  - Verify: `./corpus_dedup --verify <dedup_dir> [mask] [--dedup-mode <sentence|line|paragraph|document>]`
-  - Search: `./corpus_dedup --search <input_dir> [mask] [--limit N]`
+
+## Usage
+
+- Dedup:
+
+```sh
+./corpus_dedup <input_dir> <output_dir> [mask] \
+  [--dedup-mode <sentence|line|paragraph|document>] \
+  [--write-duplicates] [--build-block-tree] [--max-length N]
+```
+
+- Verify:
+
+```sh
+./corpus_dedup --verify <dedup_dir> [mask] \
+  [--dedup-mode <sentence|line|paragraph|document>] [--max-length N]
+```
+
+- Search:
+
+```sh
+./corpus_dedup --search <input_dir> [mask] [--limit N]
+```
 
 The executable is named `corpus_dedup` in `build/` (or your chosen build
 directory). Adjust `--config Debug|Release` if you use multi-config generators
@@ -71,15 +90,14 @@ like Ninja Multi-Config or Xcode.
 
 Optional flags:
 
-- `--dedup-mode <sentence|line|paragraph|document>` to choose dedup granularity
+- `mask` defaults to `*.txt` for all modes.
+- `--dedup-mode <sentence|line|paragraph|document>` sets dedup granularity
   (default: sentence-level).
-- `--write-duplicates` to write duplicate units into `duplicates.txt` in the
+- `--max-length N` caps normalized text length used for comparisons
+  (default: 10,000 symbols; 0 disables the limit) in dedup and verify modes.
+- `--write-duplicates` writes duplicate units into `duplicates.txt` in the
   output directory (disabled by default).
-- `--build-block-tree` to construct a Block Tree over the deduplicated output
+- `--build-block-tree` constructs a Block Tree over the deduplicated output
   (disabled by default).
-- `--verify <dedup_dir> [mask] [--dedup-mode <sentence|line|paragraph|document>]`
-  to scan an already deduplicated folder, ensure there are no duplicate units
-  at the chosen granularity, and validate the Block Tree per file.
-- `--search <input_dir> [mask] [--limit N]` to index matching files into one
-  Block Tree (optionally stopping after `N`) and run interactive queries over
-  the combined text.
+- `--limit N` in search mode stops indexing after `N` files (required to be
+  positive when provided).

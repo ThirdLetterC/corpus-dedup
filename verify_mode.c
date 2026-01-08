@@ -1,6 +1,7 @@
 #include "verify_mode.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <fnmatch.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,6 +87,20 @@ static bool parse_dedup_mode(const char *arg, DedupMode *mode) {
     return true;
   }
   return false;
+}
+
+static bool parse_size_arg(const char *value, size_t *out) {
+  if (!value || !out)
+    return false;
+  errno = 0;
+  char *end = nullptr;
+  unsigned long long parsed = strtoull(value, &end, 10);
+  if (errno != 0 || end == value || *end != '\0')
+    return false;
+  if (parsed > SIZE_MAX)
+    return false;
+  *out = (size_t)parsed;
+  return true;
 }
 
 static inline bool is_ascii_space(unsigned char c) { return c <= 0x20; }
@@ -214,8 +229,9 @@ static bool split_text_to_lines(const char8_t *text, size_t len,
 
 static bool verify_spans(DedupMode mode, const char8_t *input, size_t input_len,
                          const SentenceSpan *spans, size_t span_count,
-                         SentenceSet *seen, size_t *out_units,
-                         size_t *out_duplicates, const char *label) {
+                         size_t max_compare_len, SentenceSet *seen,
+                         size_t *out_units, size_t *out_duplicates,
+                         const char *label) {
   if (!seen || !out_units || !out_duplicates)
     return false;
   if (!input || input_len == 0 || span_count == 0)
@@ -224,6 +240,9 @@ static bool verify_spans(DedupMode mode, const char8_t *input, size_t input_len,
     return false;
 
   size_t norm_cap = input_len == 0 ? 1 : input_len;
+  if (max_compare_len != 0 && max_compare_len < norm_cap) {
+    norm_cap = max_compare_len;
+  }
   size_t alloc_size = 0;
   if (ckd_mul(&alloc_size, norm_cap, sizeof(char8_t)))
     return false;
@@ -237,6 +256,9 @@ static bool verify_spans(DedupMode mode, const char8_t *input, size_t input_len,
   for (size_t i = 0; i < span_count; ++i) {
     size_t norm_len = normalize_sentence(spans[i].start, spans[i].len, norm_buf,
                                          norm_cap);
+    if (max_compare_len != 0 && norm_len > max_compare_len) {
+      norm_len = max_compare_len;
+    }
     if (norm_len == 0)
       continue;
     bool inserted = false;
@@ -261,68 +283,75 @@ static bool verify_spans(DedupMode mode, const char8_t *input, size_t input_len,
 
 static bool verify_sentences(const char8_t *input, size_t len,
                              SentenceSet *seen, size_t *out_units,
-                             size_t *out_duplicates, const char *label) {
+                             size_t *out_duplicates, const char *label,
+                             size_t max_compare_len) {
   SentenceList sentences = split_text_to_sentences(input, len);
   bool ok = verify_spans(DEDUP_MODE_SENTENCE, input, len, sentences.sentences,
-                         sentences.count, seen, out_units, out_duplicates,
-                         label);
+                         sentences.count, max_compare_len, seen, out_units,
+                         out_duplicates, label);
   free_sentence_list(&sentences);
   return ok;
 }
 
 static bool verify_paragraphs(const char8_t *input, size_t len,
                               SentenceSet *seen, size_t *out_units,
-                              size_t *out_duplicates, const char *label) {
+                              size_t *out_duplicates, const char *label,
+                              size_t max_compare_len) {
   SpanList paragraphs = {0};
   if (!split_text_to_paragraphs(input, len, &paragraphs)) {
     return false;
   }
 
   bool ok = verify_spans(DEDUP_MODE_PARAGRAPH, input, len, paragraphs.items,
-                         paragraphs.count, seen, out_units, out_duplicates,
-                         label);
+                         paragraphs.count, max_compare_len, seen, out_units,
+                         out_duplicates, label);
   free_span_list(&paragraphs);
   return ok;
 }
 
 static bool verify_lines(const char8_t *input, size_t len, SentenceSet *seen,
                          size_t *out_units, size_t *out_duplicates,
-                         const char *label) {
+                         const char *label, size_t max_compare_len) {
   SpanList lines = {0};
   if (!split_text_to_lines(input, len, &lines)) {
     return false;
   }
 
   bool ok = verify_spans(DEDUP_MODE_LINE, input, len, lines.items, lines.count,
-                         seen, out_units, out_duplicates, label);
+                         max_compare_len, seen, out_units, out_duplicates,
+                         label);
   free_span_list(&lines);
   return ok;
 }
 
 static bool verify_document(const char8_t *input, size_t len,
                             SentenceSet *seen, size_t *out_units,
-                            size_t *out_duplicates, const char *label) {
+                            size_t *out_duplicates, const char *label,
+                            size_t max_compare_len) {
   SentenceSpan single = {.start = input, .len = len};
   size_t span_count = input && len > 0 ? 1 : 0;
   return verify_spans(DEDUP_MODE_DOCUMENT, input, len, &single, span_count,
-                      seen, out_units, out_duplicates, label);
+                      max_compare_len, seen, out_units, out_duplicates, label);
 }
 
 static bool verify_with_mode(DedupMode mode, const char8_t *input, size_t len,
-                             SentenceSet *seen, size_t *out_units,
-                             size_t *out_duplicates, const char *label) {
+                             size_t max_compare_len, SentenceSet *seen,
+                             size_t *out_units, size_t *out_duplicates,
+                             const char *label) {
   switch (mode) {
   case DEDUP_MODE_DOCUMENT:
-    return verify_document(input, len, seen, out_units, out_duplicates, label);
+    return verify_document(input, len, seen, out_units, out_duplicates, label,
+                           max_compare_len);
   case DEDUP_MODE_LINE:
-    return verify_lines(input, len, seen, out_units, out_duplicates, label);
+    return verify_lines(input, len, seen, out_units, out_duplicates, label,
+                        max_compare_len);
   case DEDUP_MODE_PARAGRAPH:
     return verify_paragraphs(input, len, seen, out_units, out_duplicates,
-                             label);
+                             label, max_compare_len);
   case DEDUP_MODE_SENTENCE:
   default:
-    return verify_sentences(input, len, seen, out_units, out_duplicates,
-                            label);
+    return verify_sentences(input, len, seen, out_units, out_duplicates, label,
+                            max_compare_len);
   }
 }
 
@@ -332,16 +361,41 @@ int run_verify(const char *prog, int argc, char **argv) {
   const char *mask = DEFAULT_MASK;
   bool mask_set = false;
   DedupMode dedup_mode = DEDUP_MODE_SENTENCE;
+  size_t max_compare_len = DEFAULT_MAX_COMPARE_LENGTH;
 
   for (int i = 1; i < argc; ++i) {
     const char *arg = argv[i];
     if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
       printf("Usage:\n  %s --verify <dedup_dir> [mask] [--dedup-mode "
-             "<sentence|line|paragraph|document>]\n"
+             "<sentence|line|paragraph|document>] [--max-length N]\n"
+             "  --max-length defaults to %zu symbols (0 disables the limit)\n"
              "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
              "RADIX_SORT_USE_ASM=%d\n",
-             prog, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+             prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
+             HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
       return 0;
+    }
+    if (strcmp(arg, "--max-length") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "Missing value for --max-length\n");
+        return 1;
+      }
+      size_t parsed = 0;
+      if (!parse_size_arg(argv[++i], &parsed)) {
+        fprintf(stderr, "Invalid --max-length value: %s\n", argv[i]);
+        return 1;
+      }
+      max_compare_len = parsed;
+      continue;
+    }
+    if (strncmp(arg, "--max-length=", 13) == 0) {
+      size_t parsed = 0;
+      if (!parse_size_arg(arg + 13, &parsed)) {
+        fprintf(stderr, "Invalid --max-length value: %s\n", arg + 13);
+        return 1;
+      }
+      max_compare_len = parsed;
+      continue;
     }
     if (strcmp(arg, "--dedup-mode") == 0) {
       if (i + 1 >= argc) {
@@ -369,19 +423,23 @@ int run_verify(const char *prog, int argc, char **argv) {
     }
     fprintf(stderr, "Unexpected argument: %s\n", arg);
     printf("Usage:\n  %s --verify <dedup_dir> [mask] [--dedup-mode "
-           "<sentence|line|paragraph|document>]\n"
+           "<sentence|line|paragraph|document>] [--max-length N]\n"
+           "  --max-length defaults to %zu symbols (0 disables the limit)\n"
            "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
            "RADIX_SORT_USE_ASM=%d\n",
-           prog, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+           prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
+           HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
     return 1;
   }
 
   if (!input_dir) {
     printf("Usage:\n  %s --verify <dedup_dir> [mask] [--dedup-mode "
-           "<sentence|line|paragraph|document>]\n"
+           "<sentence|line|paragraph|document>] [--max-length N]\n"
+           "  --max-length defaults to %zu symbols (0 disables the limit)\n"
            "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
            "RADIX_SORT_USE_ASM=%d\n",
-           prog, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+           prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
+           HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
     return 1;
   }
 
@@ -476,8 +534,8 @@ int run_verify(const char *prog, int argc, char **argv) {
     }
 
     sentence_set_reserve_for_bytes(&seen, byte_len);
-    if (!verify_with_mode(dedup_mode, raw_text, byte_len, &seen, &units_checked,
-                          &duplicate_units, name)) {
+    if (!verify_with_mode(dedup_mode, raw_text, byte_len, max_compare_len,
+                          &seen, &units_checked, &duplicate_units, name)) {
       fprintf(stderr, "Failed to verify %s-level duplicates for: %s\n",
               dedup_mode_name(dedup_mode), name);
       errors++;
