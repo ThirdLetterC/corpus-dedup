@@ -696,7 +696,11 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
   if (count == 0)
     return;
 
-  if (count < HASH_PARALLEL_THRESHOLD) {
+  size_t thread_count = detect_thread_count();
+  if (thread_count == 0)
+    thread_count = 1;
+
+  if (thread_count <= 1) {
     ThreadContext ctx = {.nodes = candidates,
                          .start_idx = 0,
                          .end_idx = count,
@@ -706,11 +710,8 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
     return;
   }
 
-  size_t thread_count = detect_thread_count();
-  if (thread_count == 0)
-    thread_count = 1;
-
-  if (thread_count <= 1) {
+  size_t threshold = HASH_PARALLEL_BASE * thread_count;
+  if (count < threshold) {
     ThreadContext ctx = {.nodes = candidates,
                          .start_idx = 0,
                          .end_idx = count,
@@ -766,7 +767,8 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
 /**
  * @brief Comparator for sorting BlockNodes.
  * Primary Key: Hash
- * Secondary Key: Position
+ * Secondary Key: Length
+ * Tertiary Key: Position
  */
 int compare_nodes(const void *a, const void *b) {
   const BlockNode *const *nodeA = a;
@@ -775,6 +777,11 @@ int compare_nodes(const void *a, const void *b) {
   if ((*nodeA)->block_id < (*nodeB)->block_id)
     return -1;
   if ((*nodeA)->block_id > (*nodeB)->block_id)
+    return 1;
+
+  if ((*nodeA)->length < (*nodeB)->length)
+    return -1;
+  if ((*nodeA)->length > (*nodeB)->length)
     return 1;
 
   if ((*nodeA)->start_pos < (*nodeB)->start_pos)
@@ -979,10 +986,14 @@ static void radix_pass_block_id(BlockNode **src, BlockNode **dst, size_t count,
 #endif
 }
 
-static void radix_sort_block_nodes(BlockNode **items, BlockNode **tmp,
+static bool radix_sort_block_nodes(BlockNode **items, BlockNode **tmp,
                                    size_t count) {
   if (count <= 1)
-    return;
+    return true;
+  if (count < RADIX_SORT_MIN_COUNT) {
+    qsort(items, count, sizeof(*items), compare_nodes);
+    return true;
+  }
   BlockNode **src = items;
   BlockNode **dst = tmp;
   for (size_t pass = 0; pass < sizeof(size_t); ++pass) {
@@ -1000,6 +1011,7 @@ static void radix_sort_block_nodes(BlockNode **items, BlockNode **tmp,
   if (src != items) {
     memcpy(items, src, count * sizeof(*items));
   }
+  return true;
 }
 
 // ==========================================
@@ -1060,7 +1072,11 @@ void deduplicate_level(BlockNode **candidates, size_t count,
   }
 
   // 1. Sort to group identical hashes (and lengths) with lower overhead.
-  radix_sort_block_nodes(candidates, next_marked, count);
+  if (!radix_sort_block_nodes(candidates, next_marked, count)) {
+    if (out_marked_count)
+      *out_marked_count = 0;
+    return;
+  }
 
   // 2. Identification Scan
   // The first node in a group of identical hashes is the "Leader" (Marked).
