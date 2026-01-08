@@ -87,6 +87,9 @@ static void *sentence_arena_alloc(SentenceArena *arena, size_t size) {
   return ptr;
 }
 
+[[nodiscard]] static bool sentence_set_rehash(SentenceSet *set,
+                                              size_t new_bucket_count);
+
 bool sentence_set_init(SentenceSet *set, size_t bucket_count) {
   if (!set)
     return false;
@@ -114,7 +117,10 @@ void sentence_set_destroy(SentenceSet *set) {
   sentence_arena_destroy(&set->arena);
 }
 
-static bool sentence_set_rehash(SentenceSet *set, size_t new_bucket_count) {
+[[nodiscard]] static bool sentence_set_rehash(SentenceSet *set,
+                                              size_t new_bucket_count) {
+  if (!set)
+    return false;
   size_t size = round_up_pow2(new_bucket_count);
   size_t alloc_size = 0;
   if (ckd_mul(&alloc_size, size, sizeof(*set->buckets)))
@@ -161,7 +167,7 @@ void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
     return;
   size_t next_size = round_up_pow2(needed);
   if (next_size > set->bucket_count) {
-    sentence_set_rehash(set, next_size);
+    (void)sentence_set_rehash(set, next_size);
   }
 }
 
@@ -202,7 +208,7 @@ bool sentence_set_insert(SentenceSet *set, const char8_t *data, size_t len,
   if (set->entry_count > (set->bucket_count * 3) / 4) {
     size_t next_size = 0;
     if (!ckd_mul(&next_size, set->bucket_count, (size_t)2)) {
-      sentence_set_rehash(set, next_size);
+      (void)sentence_set_rehash(set, next_size);
     }
   }
   return true;

@@ -6,34 +6,40 @@
 #include <stdio.h>
 #include <time.h>
 
+static constexpr uint64_t NS_PER_SEC = 1'000'000'000ull;
+static constexpr uint64_t NS_PER_MS = 1'000'000ull;
+static constexpr uint64_t NS_PER_US = 1'000ull;
+static constexpr double MIN_ELAPSED = 0.0001;
+static constexpr double UPDATE_INTERVAL = 0.1;
+
 double now_seconds() {
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     return 0.0;
-  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+  return (double)ts.tv_sec + (double)ts.tv_nsec / (double)NS_PER_SEC;
 }
 
 uint64_t now_ns() {
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     return 0;
-  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+  return (uint64_t)ts.tv_sec * NS_PER_SEC + (uint64_t)ts.tv_nsec;
 }
 
 void print_duration_ns(uint64_t ns) {
-  if (ns < 1000ull) {
+  if (ns < NS_PER_US) {
     printf("%" PRIu64 " ns", ns);
     return;
   }
-  if (ns < 1000ull * 1000ull) {
-    printf("%.3f us", (double)ns / 1e3);
+  if (ns < NS_PER_MS) {
+    printf("%.3f us", (double)ns / (double)NS_PER_US);
     return;
   }
-  if (ns < 1000ull * 1000ull * 1000ull) {
-    printf("%.3f ms", (double)ns / 1e6);
+  if (ns < NS_PER_SEC) {
+    printf("%.3f ms", (double)ns / (double)NS_PER_MS);
     return;
   }
-  double seconds = (double)ns / 1e9;
+  double seconds = (double)ns / (double)NS_PER_SEC;
   if (seconds < 60.0) {
     printf("%.3f s", seconds);
     return;
@@ -52,13 +58,14 @@ void render_progress(size_t done, size_t total, size_t bytes_done,
   constexpr int bar_width = 30;
   static double last_update = 0.0;
   double now = now_seconds();
-  if (now > 0.0 && done != 0 && done != total && now - last_update < 0.1) {
+  if (now > 0.0 && done != 0 && done != total &&
+      now - last_update < UPDATE_INTERVAL) {
     return;
   }
   last_update = now;
   double elapsed = now - start_time;
-  if (elapsed < 0.0001)
-    elapsed = 0.0001;
+  if (elapsed < MIN_ELAPSED)
+    elapsed = MIN_ELAPSED;
   double rate = (double)done / elapsed;
   double mb_done = (double)bytes_done / (1024.0 * 1024.0);
   double mb_rate = mb_done / elapsed;
