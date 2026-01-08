@@ -1,14 +1,26 @@
 // nasm -f elf64 -O3 wavesort.asm -o wavesort.o
-
-// clang -DWAVESORT_USE_ASM=1 -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3  -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
-  -fprofile-generate block_tree.c sentence_splitter.c wavesort.o -o corpus_dedup
-
+// clang -x assembler-with-cpp -c -DHASH_UNROLL=8 -DHASH_PREFETCH_DISTANCE=256 \
+//   hash_worker.asm -o hash_worker.o
+// clang -x assembler-with-cpp -c radix_histogram_length.asm -o radix_histogram_length.o
+// clang -x assembler-with-cpp -c radix_scatter_length.asm -o radix_scatter_length.o
+// clang -x assembler-with-cpp -c radix_histogram_block_id.asm -o radix_histogram_block_id.o
+// clang -x assembler-with-cpp -c radix_scatter_block_id.asm -o radix_scatter_block_id.o
+//
+// clang -DWAVESORT_USE_ASM=1 -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3 -mavx2 \
+//   -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
+//   -fprofile-generate block_tree.c sentence_splitter.c hash_worker.o \
+//   radix_histogram_length.o radix_scatter_length.o \
+//   radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o corpus_dedup
+//
 // BLOCK_TREE_THREADS=1 ./corpus_dedup data/kobza_1 out
-
+//
 // llvm-profdata merge -output=block_tree.profdata default.profraw
-
-// clang -DWAVESORT_USE_ASM=1 -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3 -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
-  -fprofile-use=block_tree.profdata block_tree.c sentence_splitter.c wavesort.o -o corpus_dedup
+//
+// clang -DWAVESORT_USE_ASM=1 -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3 -mavx2 \
+//   -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
+//   -fprofile-use=block_tree.profdata block_tree.c sentence_splitter.c \
+//   hash_worker.o radix_histogram_length.o radix_scatter_length.o \
+//   radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o corpus_dedup
 
 #include <assert.h>
 #include <dirent.h>
@@ -31,6 +43,7 @@
 #include <uchar.h>
 
 #include "sentence_splitter.h"
+#include "block_tree_asm_defs.h"
 
 // ==========================================
 // 1. Constants & Configuration
@@ -220,43 +233,17 @@ void arena_destroy(Arena *a) {
  * @brief Worker function for parallel rolling hash computation.
  */
 // UTF-32 hashing has a scalar ASM path; leave disabled unless needed.
-#define HASH_WORKER_USE_ASM 1
-// Enable radix-sort assembly for dedup sorting (x86_64 + GCC/Clang only).
-#ifndef RADIX_SORT_USE_ASM
-#define RADIX_SORT_USE_ASM 1
-#endif
-// Compile-time unroll factor for hash_worker (valid: 4 or 8).
-#ifndef HASH_UNROLL
-#define HASH_UNROLL 4
-#endif
-#if HASH_UNROLL != 4 && HASH_UNROLL != 8
-#error "HASH_UNROLL must be 4 or 8"
-#endif
-#ifndef HASH_PREFETCH_DISTANCE
-// Bytes ahead of the current pointer to prefetch (0 disables prefetch).
-#define HASH_PREFETCH_DISTANCE 256
-#endif
-// Precomputed powers for HASH_MULT == 31.
-#define HASH_MULT_POW1_IMM 31
-#define HASH_MULT_POW2_IMM 961
-#define HASH_MULT_POW3_IMM 29791
-#define HASH_MULT_POW4_IMM 923521
+// Assembly configuration lives in block_tree_asm_defs.h.
 #define HASH_MULT_POW1 ((uint64_t)HASH_MULT_POW1_IMM)
 #define HASH_MULT_POW2 ((uint64_t)HASH_MULT_POW2_IMM)
 #define HASH_MULT_POW3 ((uint64_t)HASH_MULT_POW3_IMM)
 #define HASH_MULT_POW4 ((uint64_t)HASH_MULT_POW4_IMM)
 
-#if RADIX_SORT_USE_ASM && defined(__x86_64__) &&                               \
-    (defined(__GNUC__) || defined(__clang__))
-#define RADIX_SORT_USE_ASM_IMPL 1
-#define RADIX_NODE_LENGTH_OFFSET 32
-#define RADIX_NODE_BLOCK_ID_OFFSET 48
+#if RADIX_SORT_USE_ASM_IMPL
 static_assert(offsetof(BlockNode, length) == RADIX_NODE_LENGTH_OFFSET,
               "BlockNode layout changed");
 static_assert(offsetof(BlockNode, block_id) == RADIX_NODE_BLOCK_ID_OFFSET,
               "BlockNode layout changed");
-#else
-#define RADIX_SORT_USE_ASM_IMPL 0
 #endif
 
 #ifndef WAVESORT_USE_ASM
@@ -269,16 +256,6 @@ static_assert(offsetof(BlockNode, block_id) == RADIX_NODE_BLOCK_ID_OFFSET,
 #endif
 
 #if HASH_WORKER_USE_ASM
-#define CTX_NODES 0
-#define CTX_START_IDX 8
-#define CTX_END_IDX 16
-#define CTX_TEXT 24
-#define CTX_TEXT_LEN 32
-
-#define NODE_START_POS 24
-#define NODE_LENGTH 32
-#define NODE_BLOCK_ID 48
-
 static_assert(offsetof(ThreadContext, nodes) == CTX_NODES,
               "ThreadContext layout changed");
 static_assert(offsetof(ThreadContext, start_idx) == CTX_START_IDX,
@@ -298,194 +275,6 @@ static_assert(offsetof(BlockNode, block_id) == NODE_BLOCK_ID,
               "BlockNode layout changed");
 
 int hash_worker(void *arg);
-
-#define STR2(x) #x
-#define STR(x) STR2(x)
-
-#if HASH_PREFETCH_DISTANCE
-#define HASH_PREFETCH_ASM                                                      \
-  "  prefetcht0 [r8 + " STR(HASH_PREFETCH_DISTANCE) "]\n"
-#else
-#define HASH_PREFETCH_ASM ""
-#endif
-
-#define HASH_ALIGN_ASM "  .p2align 4\n"
-
-#if HASH_UNROLL == 8
-__asm__(".text\n"
-        ".intel_syntax noprefix\n"
-        ".globl hash_worker\n"
-        ".type hash_worker,@function\n" HASH_ALIGN_ASM "hash_worker:\n"
-        "  push rbx\n"
-        "  push r12\n"
-        "  mov rbx, [rdi + " STR(
-            CTX_NODES) "]\n"
-                       "  mov r11, [rdi + " STR(
-                           CTX_START_IDX) "]\n"
-                                          "  mov r12, [rdi + " STR(CTX_END_IDX) "]\n"
-                                                                                "  mov r9, [rdi + " STR(
-                                                                                    CTX_TEXT) "]\n"
-                                                                                              "  mov r10, [rdi + " STR(CTX_TEXT_LEN) "]\n"
-                                                                                                                                     "  jmp .Lcheck_outer\n"
-                                                                                                                                     ".Louter:\n"
-                                                                                                                                     "  mov rdx, [rbx + r11*8]\n"
-                                                                                                                                     "  mov rcx, [rdx + " STR(NODE_START_POS) "]\n"
-                                                                                                                                                                              "  cmp rcx, r10\n"
-                                                                                                                                                                              "  jae .Lset_zero\n"
-                                                                                                                                                                              "  mov rax, [rdx + " STR(NODE_LENGTH) "]\n"
-                                                                                                                                                                                                                    "  mov rsi, r10\n"
-                                                                                                                                                                                                                    "  sub rsi, rcx\n"
-                                                                                                                                                                                                                    "  cmp rax, rsi\n"
-                                                                                                                                                                                                                    "  cmova rax, rsi\n"
-                                                                                                                                                                                                                    "  lea r8, [r9 + rcx*4]\n"
-                                                                                                                                                                                                                    "  xor rcx, rcx\n"
-                                                                                                                                                                                                                    "  test rax, rax\n"
-                                                                                                                                                                                                                    "  je .Lstore\n"
-                                                                                                                                                                                                                    ".Lword_loop:\n"
-                                                                                                                                                                                                                    "  cmp rax, 8\n"
-                                                                                                                                                                                                                    "  jb .Lword_tail\n" HASH_ALIGN_ASM ".Lword_loop8:\n" HASH_PREFETCH_ASM
-                                                                                                                                                                                                                    "  mov edi, dword ptr [r8]\n"
-                                                                                                                                                                                                                    "  imul rdi, rdi, " STR(HASH_MULT_POW3_IMM) "\n"
-                                                                                                                                                                                                                                                                "  mov esi, dword ptr [r8 + 4]\n"
-                                                                                                                                                                                                                                                                "  imul rsi, rsi, " STR(HASH_MULT_POW2_IMM) "\n"
-                                                                                                                                                                                                                                                                                                            "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                            "  mov esi, dword ptr [r8 + 8]\n"
-                                                                                                                                                                                                                                                                                                            "  imul rsi, rsi, " STR(
-                                                                                                                                                                                                                                                                                                                HASH_MULT_POW1_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                    "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                                                    "  mov esi, dword ptr [r8 + 12]\n"
-                                                                                                                                                                                                                                                                                                                                    "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                                                    "  imul rcx, rcx, " STR(HASH_MULT_POW4_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                                                                "  add rcx, rdi\n"
-                                                                                                                                                                                                                                                                                                                                                                                "  mov edi, dword ptr [r8 + 16]\n"
-                                                                                                                                                                                                                                                                                                                                                                                "  imul rdi, rdi, " STR(HASH_MULT_POW3_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                            "  mov esi, dword ptr [r8 + 20]\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                            "  imul rsi, rsi, " STR(HASH_MULT_POW2_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "  mov esi, dword ptr [r8 + 24]\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "  imul rsi, rsi, " STR(HASH_MULT_POW1_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "  mov esi, dword ptr [r8 + 28]\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "  imul rcx, rcx, " STR(
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        HASH_MULT_POW4_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  add rcx, rdi\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  add r8, 32\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  sub rax, 8\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  cmp rax, 8\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  jae .Lword_loop8\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ".Lword_tail:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  test rax, rax\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  je .Lstore\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ".Lword_tail_loop:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  mov edi, dword ptr [r8]\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  imul rcx, rcx, 31\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  add rcx, rdi\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  add r8, 4\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  dec rax\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  jne .Lword_tail_loop\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ".Lstore:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "  mov qword ptr [rdx + " STR(NODE_BLOCK_ID) "], rcx\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         "  jmp .Lnext\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ".Lset_zero:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         "  mov qword ptr [rdx + " STR(NODE_BLOCK_ID) "], 0\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      ".Lnext:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      "  inc r11\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      ".Lcheck_outer:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      "  cmp r11, r12\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      "  jb .Louter\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      "  xor eax, eax\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      "  pop r12\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      "  pop rbx\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      "  ret\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      ".att_syntax prefix\n");
-#else
-__asm__(
-    ".text\n"
-    ".intel_syntax noprefix\n"
-    ".globl hash_worker\n"
-    ".type hash_worker,@function\n" HASH_ALIGN_ASM "hash_worker:\n"
-    "  push rbx\n"
-    "  push r12\n"
-    "  mov rbx, [rdi + " STR(
-        CTX_NODES) "]\n"
-                   "  mov r11, [rdi + " STR(
-                       CTX_START_IDX) "]\n"
-                                      "  mov r12, [rdi + " STR(CTX_END_IDX) "]"
-                                                                            "\n"
-                                                                            "  "
-                                                                            "mo"
-                                                                            "v "
-                                                                            "r9"
-                                                                            ", "
-                                                                            "[r"
-                                                                            "di"
-                                                                            " +"
-                                                                            " " STR(
-                                                                                CTX_TEXT) "]\n"
-                                                                                          "  mov r10, [rdi + " STR(CTX_TEXT_LEN) "]\n"
-                                                                                                                                 "  jmp .Lcheck_outer\n"
-                                                                                                                                 ".Louter:\n"
-                                                                                                                                 "  mov rdx, [rbx + r11*8]\n"
-                                                                                                                                 "  mov rcx, [rdx + " STR(NODE_START_POS) "]\n"
-                                                                                                                                                                          "  cmp rcx, r10\n"
-                                                                                                                                                                          "  jae .Lset_zero\n"
-                                                                                                                                                                          "  mov rax, [rdx + " STR(NODE_LENGTH) "]\n"
-                                                                                                                                                                                                                "  mov rsi, r10\n"
-                                                                                                                                                                                                                "  sub rsi, rcx\n"
-                                                                                                                                                                                                                "  cmp rax, rsi\n"
-                                                                                                                                                                                                                "  cmova rax, rsi\n"
-                                                                                                                                                                                                                "  lea r8, [r9 + rcx*4]\n"
-                                                                                                                                                                                                                "  xor rcx, rcx\n"
-                                                                                                                                                                                                                "  test rax, rax\n"
-                                                                                                                                                                                                                "  je .Lstore\n"
-                                                                                                                                                                                                                ".Lword_loop:\n"
-                                                                                                                                                                                                                "  cmp rax, 4\n"
-                                                                                                                                                                                                                "  jb .Lword_tail\n" HASH_ALIGN_ASM ".Lword_loop4:\n" HASH_PREFETCH_ASM "  mov edi, dword ptr [r8]\n"
-                                                                                                                                                                                                                "  imul rdi, rdi, " STR(
-                                                                                                                                                                                                                    HASH_MULT_POW3_IMM) "\n"
-                                                                                                                                                                                                                                        "  mov esi, dword ptr [r8 + 4]\n"
-                                                                                                                                                                                                                                        "  imul rsi, rsi, " STR(HASH_MULT_POW2_IMM) "\n"
-                                                                                                                                                                                                                                                                                    "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                    "  mov esi, dword ptr [r8 + 8]\n"
-                                                                                                                                                                                                                                                                                    "  imul rsi, rsi, " STR(HASH_MULT_POW1_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                                                "  mov esi, dword ptr [r8 + 12]\n"
-                                                                                                                                                                                                                                                                                                                                "  add rdi, rsi\n"
-                                                                                                                                                                                                                                                                                                                                "  imul rcx, rcx, " STR(
-                                                                                                                                                                                                                                                                                                                                    HASH_MULT_POW4_IMM) "\n"
-                                                                                                                                                                                                                                                                                                                                                        "  add rcx, rdi\n"
-                                                                                                                                                                                                                                                                                                                                                        "  add r8, 16\n"
-                                                                                                                                                                                                                                                                                                                                                        "  sub rax, 4\n"
-                                                                                                                                                                                                                                                                                                                                                        "  cmp rax, 4\n"
-                                                                                                                                                                                                                                                                                                                                                        "  jae .Lword_loop4\n"
-                                                                                                                                                                                                                                                                                                                                                        ".Lword_tail:\n"
-                                                                                                                                                                                                                                                                                                                                                        "  test rax, rax\n"
-                                                                                                                                                                                                                                                                                                                                                        "  je .Lstore\n"
-                                                                                                                                                                                                                                                                                                                                                        ".Lword_tail_loop:\n"
-                                                                                                                                                                                                                                                                                                                                                        "  mov edi, dword ptr [r8]\n"
-                                                                                                                                                                                                                                                                                                                                                        "  imul rcx, rcx, 31\n"
-                                                                                                                                                                                                                                                                                                                                                        "  add rcx, rdi\n"
-                                                                                                                                                                                                                                                                                                                                                        "  add r8, 4\n"
-                                                                                                                                                                                                                                                                                                                                                        "  dec rax\n"
-                                                                                                                                                                                                                                                                                                                                                        "  jne .Lword_tail_loop\n"
-                                                                                                                                                                                                                                                                                                                                                        ".Lstore:\n"
-                                                                                                                                                                                                                                                                                                                                                        "  mov qword ptr [rdx + " STR(
-                                                                                                                                                                                                                                                                                                                                                            NODE_BLOCK_ID) "], rcx\n"
-                                                                                                                                                                                                                                                                                                                                                                           "  jmp .Lnext\n"
-                                                                                                                                                                                                                                                                                                                                                                           ".Lset_zero:\n"
-                                                                                                                                                                                                                                                                                                                                                                           "  mov qword ptr [rdx + " STR(NODE_BLOCK_ID) "], 0\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        ".Lnext:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        "  inc r11\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        ".Lcheck_outer:\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        "  cmp r11, r12\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        "  jb .Louter\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        "  xor eax, eax\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        "  pop r12\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        "  pop rbx\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        "  ret\n"
-                                                                                                                                                                                                                                                                                                                                                                                                                        ".att_syntax prefix\n");
-#endif
 #else
 int hash_worker(void *arg) {
   ThreadContext *ctx = (ThreadContext *)arg;
@@ -1167,118 +956,6 @@ void radix_histogram_block_id_asm(BlockNode **src, size_t count,
 void radix_scatter_block_id_asm(BlockNode **src, BlockNode **dst, size_t count,
                                 unsigned int shift, size_t *buckets);
 
-#ifndef STR
-#define STR2(x) #x
-#define STR(x) STR2(x)
-#endif
-
-__asm__(".intel_syntax noprefix\n"
-        ".text\n"
-        ".globl radix_histogram_length_asm\n"
-        ".type radix_histogram_length_asm,@function\n"
-        "radix_histogram_length_asm:\n"
-        "  test rsi, rsi\n"
-        "  jz 1f\n"
-        "  mov r8, rcx\n"
-        "  mov ecx, edx\n"
-        "  xor rax, rax\n"
-        "0:\n"
-        "  mov r9, qword ptr [rdi + rax*8]\n"
-        "  mov r10, qword ptr [r9 + " STR(
-            RADIX_NODE_LENGTH_OFFSET) "]\n"
-                                      "  shr r10, cl\n"
-                                      "  and r10, 0xFF\n"
-                                      "  lea r11, [r8 + r10*8]\n"
-                                      "  add qword ptr [r11], 1\n"
-                                      "  inc rax\n"
-                                      "  cmp rax, rsi\n"
-                                      "  jb 0b\n"
-                                      "1:\n"
-                                      "  ret\n"
-                                      ".size radix_histogram_length_asm, "
-                                      ".-radix_histogram_length_asm\n"
-                                      ".att_syntax prefix\n");
-
-__asm__(".intel_syntax noprefix\n"
-        ".text\n"
-        ".globl radix_scatter_length_asm\n"
-        ".type radix_scatter_length_asm,@function\n"
-        "radix_scatter_length_asm:\n"
-        "  test rdx, rdx\n"
-        "  jz 1f\n"
-        "  xor rax, rax\n"
-        "0:\n"
-        "  mov r9, qword ptr [rdi + rax*8]\n"
-        "  mov r10, qword ptr [r9 + " STR(
-            RADIX_NODE_LENGTH_OFFSET) "]\n"
-                                      "  shr r10, cl\n"
-                                      "  and r10, 0xFF\n"
-                                      "  lea r11, [r8 + r10*8]\n"
-                                      "  mov r10, qword ptr [r11]\n"
-                                      "  mov qword ptr [rsi + r10*8], r9\n"
-                                      "  add qword ptr [r11], 1\n"
-                                      "  inc rax\n"
-                                      "  cmp rax, rdx\n"
-                                      "  jb 0b\n"
-                                      "1:\n"
-                                      "  ret\n"
-                                      ".size radix_scatter_length_asm, "
-                                      ".-radix_scatter_length_asm\n"
-                                      ".att_syntax prefix\n");
-
-__asm__(".intel_syntax noprefix\n"
-        ".text\n"
-        ".globl radix_histogram_block_id_asm\n"
-        ".type radix_histogram_block_id_asm,@function\n"
-        "radix_histogram_block_id_asm:\n"
-        "  test rsi, rsi\n"
-        "  jz 1f\n"
-        "  mov r8, rcx\n"
-        "  mov ecx, edx\n"
-        "  xor rax, rax\n"
-        "0:\n"
-        "  mov r9, qword ptr [rdi + rax*8]\n"
-        "  mov r10, qword ptr [r9 + " STR(
-            RADIX_NODE_BLOCK_ID_OFFSET) "]\n"
-                                        "  shr r10, cl\n"
-                                        "  and r10, 0xFF\n"
-                                        "  lea r11, [r8 + r10*8]\n"
-                                        "  add qword ptr [r11], 1\n"
-                                        "  inc rax\n"
-                                        "  cmp rax, rsi\n"
-                                        "  jb 0b\n"
-                                        "1:\n"
-                                        "  ret\n"
-                                        ".size radix_histogram_block_id_asm, "
-                                        ".-radix_histogram_block_id_asm\n"
-                                        ".att_syntax prefix\n");
-
-__asm__(".intel_syntax noprefix\n"
-        ".text\n"
-        ".globl radix_scatter_block_id_asm\n"
-        ".type radix_scatter_block_id_asm,@function\n"
-        "radix_scatter_block_id_asm:\n"
-        "  test rdx, rdx\n"
-        "  jz 1f\n"
-        "  xor rax, rax\n"
-        "0:\n"
-        "  mov r9, qword ptr [rdi + rax*8]\n"
-        "  mov r10, qword ptr [r9 + " STR(
-            RADIX_NODE_BLOCK_ID_OFFSET) "]\n"
-                                        "  shr r10, cl\n"
-                                        "  and r10, 0xFF\n"
-                                        "  lea r11, [r8 + r10*8]\n"
-                                        "  mov r10, qword ptr [r11]\n"
-                                        "  mov qword ptr [rsi + r10*8], r9\n"
-                                        "  add qword ptr [r11], 1\n"
-                                        "  inc rax\n"
-                                        "  cmp rax, rdx\n"
-                                        "  jb 0b\n"
-                                        "1:\n"
-                                        "  ret\n"
-                                        ".size radix_scatter_block_id_asm, "
-                                        ".-radix_scatter_block_id_asm\n"
-                                        ".att_syntax prefix\n");
 #endif
 
 static void radix_pass_length(BlockNode **src, BlockNode **dst, size_t count,

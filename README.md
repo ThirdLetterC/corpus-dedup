@@ -29,19 +29,39 @@ Block Tree construction (per file):
 
 ## Build
 
+ASM build (x86_64, clang + nasm):
+
 ```sh
-cc -std=c2x -O3 -pthread block_tree.c -o block_tree
+nasm -f elf64 -O3 wavesort.asm -o wavesort.o
+clang -x assembler-with-cpp -c hash_worker.asm -o hash_worker.o
+clang -x assembler-with-cpp -c radix_histogram_length.asm -o radix_histogram_length.o
+clang -x assembler-with-cpp -c radix_scatter_length.asm -o radix_scatter_length.o
+clang -x assembler-with-cpp -c radix_histogram_block_id.asm -o radix_histogram_block_id.o
+clang -x assembler-with-cpp -c radix_scatter_block_id.asm -o radix_scatter_block_id.o
+clang -std=c2x -O3 -pthread block_tree.c sentence_splitter.c \
+  hash_worker.o radix_histogram_length.o radix_scatter_length.o \
+  radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o block_tree
+```
+
+Pure C build (no ASM):
+
+```sh
+clang -std=c2x -O3 -pthread -DHASH_WORKER_USE_ASM=0 -DRADIX_SORT_USE_ASM=0 \
+  block_tree.c sentence_splitter.c -o block_tree
 ```
 
 Optional tuning:
 
 - `-DHASH_UNROLL=8` to use 8-way unrolling in the hash worker (default: 4).
 - `BLOCK_TREE_THREADS=8` to override auto-detected thread count at runtime.
+- When overriding `HASH_UNROLL` or `HASH_PREFETCH_DISTANCE`, pass the same `-D`
+  flags to the `clang -x assembler-with-cpp` steps.
 
 Example:
 
 ```sh
-cc -std=c2x -O3 -pthread -DHASH_UNROLL=8 block_tree.c -o block_tree
+cc -std=c2x -O3 -pthread -DHASH_UNROLL=8 -DHASH_WORKER_USE_ASM=0 \
+  -DRADIX_SORT_USE_ASM=0 block_tree.c sentence_splitter.c -o block_tree
 BLOCK_TREE_THREADS=8 ./block_tree data/dedup out
 ```
 

@@ -9,3 +9,8 @@ corpus_dedup_optimized
 *.profdata
 
 wavesort.o
+hash_worker.o
+radix_histogram_length.o
+radix_scatter_length.o
+radix_histogram_block_id.o
+radix_scatter_block_id.o
