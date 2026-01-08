@@ -10,12 +10,14 @@
 // clang -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3 -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
   -fprofile-use=block_tree.profdata sentence_splitter.c block_tree.c  wavesort.o -o corpus_dedup_optimized
 
+#include <assert.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
 #include <inttypes.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdckdint.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -233,10 +235,10 @@ void arena_destroy(Arena *a) {
 #define RADIX_SORT_USE_ASM_IMPL 1
 #define RADIX_NODE_LENGTH_OFFSET 32
 #define RADIX_NODE_BLOCK_ID_OFFSET 48
-_Static_assert(offsetof(BlockNode, length) == RADIX_NODE_LENGTH_OFFSET,
-               "BlockNode layout changed");
-_Static_assert(offsetof(BlockNode, block_id) == RADIX_NODE_BLOCK_ID_OFFSET,
-               "BlockNode layout changed");
+static_assert(offsetof(BlockNode, length) == RADIX_NODE_LENGTH_OFFSET,
+              "BlockNode layout changed");
+static_assert(offsetof(BlockNode, block_id) == RADIX_NODE_BLOCK_ID_OFFSET,
+              "BlockNode layout changed");
 #else
 #define RADIX_SORT_USE_ASM_IMPL 0
 #endif
@@ -261,23 +263,23 @@ _Static_assert(offsetof(BlockNode, block_id) == RADIX_NODE_BLOCK_ID_OFFSET,
 #define NODE_LENGTH 32
 #define NODE_BLOCK_ID 48
 
-_Static_assert(offsetof(ThreadContext, nodes) == CTX_NODES,
-               "ThreadContext layout changed");
-_Static_assert(offsetof(ThreadContext, start_idx) == CTX_START_IDX,
-               "ThreadContext layout changed");
-_Static_assert(offsetof(ThreadContext, end_idx) == CTX_END_IDX,
-               "ThreadContext layout changed");
-_Static_assert(offsetof(ThreadContext, text) == CTX_TEXT,
-               "ThreadContext layout changed");
-_Static_assert(offsetof(ThreadContext, text_len) == CTX_TEXT_LEN,
-               "ThreadContext layout changed");
+static_assert(offsetof(ThreadContext, nodes) == CTX_NODES,
+              "ThreadContext layout changed");
+static_assert(offsetof(ThreadContext, start_idx) == CTX_START_IDX,
+              "ThreadContext layout changed");
+static_assert(offsetof(ThreadContext, end_idx) == CTX_END_IDX,
+              "ThreadContext layout changed");
+static_assert(offsetof(ThreadContext, text) == CTX_TEXT,
+              "ThreadContext layout changed");
+static_assert(offsetof(ThreadContext, text_len) == CTX_TEXT_LEN,
+              "ThreadContext layout changed");
 
-_Static_assert(offsetof(BlockNode, start_pos) == NODE_START_POS,
-               "BlockNode layout changed");
-_Static_assert(offsetof(BlockNode, length) == NODE_LENGTH,
-               "BlockNode layout changed");
-_Static_assert(offsetof(BlockNode, block_id) == NODE_BLOCK_ID,
-               "BlockNode layout changed");
+static_assert(offsetof(BlockNode, start_pos) == NODE_START_POS,
+              "BlockNode layout changed");
+static_assert(offsetof(BlockNode, length) == NODE_LENGTH,
+              "BlockNode layout changed");
+static_assert(offsetof(BlockNode, block_id) == NODE_BLOCK_ID,
+              "BlockNode layout changed");
 
 int hash_worker(void *arg);
 
@@ -1958,9 +1960,11 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
   if (!input || len == 0)
     return true;
 
-  if (len > (SIZE_MAX - 1) / 2)
+  size_t out_cap = 0;
+  if (ckd_mul(&out_cap, len, (size_t)2) ||
+      ckd_add(&out_cap, out_cap, (size_t)1)) {
     return false;
-  size_t out_cap = len * 2 + 1;
+  }
 
   uint8_t *buffer = malloc(out_cap);
   if (!buffer)
@@ -2031,7 +2035,13 @@ static bool read_file_bytes(const char *path, uint8_t **out, size_t *out_len) {
   }
 
   size_t byte_len = (size_t)file_size;
-  uint8_t *buffer = malloc(byte_len + 1);
+  size_t alloc_size = 0;
+  if (ckd_add(&alloc_size, byte_len, (size_t)1)) {
+    fprintf(stderr, "Input file too large: %s\n", path);
+    fclose(fp);
+    return false;
+  }
+  uint8_t *buffer = malloc(alloc_size);
   if (!buffer) {
     fprintf(stderr, "Failed to allocate text buffer for: %s\n", path);
     fclose(fp);
@@ -2076,7 +2086,10 @@ static char *dup_string(const char *input) {
   if (!input)
     return nullptr;
   size_t len = strlen(input);
-  char *out = malloc(len + 1);
+  size_t alloc_size = 0;
+  if (ckd_add(&alloc_size, len, (size_t)1))
+    return nullptr;
+  char *out = malloc(alloc_size);
   if (!out)
     return nullptr;
   memcpy(out, input, len);
@@ -2090,7 +2103,13 @@ static char *join_path(const char *dir, const char *name) {
   size_t dir_len = strlen(dir);
   size_t name_len = strlen(name);
   bool needs_sep = (dir_len > 0 && dir[dir_len - 1] != '/');
-  size_t total = dir_len + (needs_sep ? 1 : 0) + name_len + 1;
+  size_t total = 0;
+  if (ckd_add(&total, dir_len, name_len))
+    return nullptr;
+  if (needs_sep && ckd_add(&total, total, (size_t)1))
+    return nullptr;
+  if (ckd_add(&total, total, (size_t)1))
+    return nullptr;
   char *path = malloc(total);
   if (!path)
     return nullptr;
