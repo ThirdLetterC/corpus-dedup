@@ -1830,6 +1830,12 @@ deduplicate_sentences(const char8_t *input, size_t len, SentenceSet *seen,
     free(buffer);
     return false;
   }
+
+  for (size_t i = 0; i < byte_len; ++i) {
+    if (buffer[i] == (char8_t)'\n' || buffer[i] == (char8_t)'\r') {
+      buffer[i] = (char8_t)' ';
+    }
+  }
   buffer[byte_len] = (char8_t)'\0';
 
   *out = buffer;
