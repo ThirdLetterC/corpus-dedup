@@ -74,7 +74,8 @@ const char *DEFAULT_MASK = "*.txt";
 const size_t SENTENCE_ARENA_BLOCK_SIZE = 1024 * 64;
 const size_t HASH_PARALLEL_BASE = 64;
 const size_t RADIX_SORT_MIN_COUNT = 64;
-const size_t SEARCH_CHECKPOINT_STRIDE = 256;
+const size_t SEARCH_CHECKPOINT_STRIDE = 1024;
+const size_t SEARCH_ARENA_BLOCK_SIZE = 1024 * 1024;
 
 // ==========================================
 // 2. Data Structures
@@ -189,8 +190,6 @@ typedef struct {
   size_t byte_len;
   size_t invalid;
   BlockNode *root;
-  size_t *line_starts;
-  size_t line_count;
   size_t *checkpoints;
   size_t checkpoint_count;
   size_t checkpoint_stride;
@@ -1113,49 +1112,6 @@ static bool ensure_ptr_capacity(BlockNode ***buffer, size_t *cap,
   return true;
 }
 
-static bool ensure_size_capacity(size_t **buffer, size_t *cap, size_t needed) {
-  if (*cap >= needed)
-    return true;
-  size_t new_cap = *cap ? *cap : 16;
-  while (new_cap < needed) {
-    size_t next_cap = 0;
-    if (ckd_mul(&next_cap, new_cap, (size_t)2))
-      return false;
-    new_cap = next_cap;
-  }
-  size_t alloc_size = 0;
-  if (ckd_mul(&alloc_size, new_cap, sizeof(**buffer)))
-    return false;
-  size_t *next = realloc(*buffer, alloc_size);
-  if (!next)
-    return false;
-  *buffer = next;
-  *cap = new_cap;
-  return true;
-}
-
-static bool ensure_search_capacity(SearchFile **buffer, size_t *cap,
-                                   size_t needed) {
-  if (*cap >= needed)
-    return true;
-  size_t new_cap = *cap ? *cap : 16;
-  while (new_cap < needed) {
-    size_t next_cap = 0;
-    if (ckd_mul(&next_cap, new_cap, (size_t)2))
-      return false;
-    new_cap = next_cap;
-  }
-  size_t alloc_size = 0;
-  if (ckd_mul(&alloc_size, new_cap, sizeof(**buffer)))
-    return false;
-  SearchFile *next = realloc(*buffer, alloc_size);
-  if (!next)
-    return false;
-  *buffer = next;
-  *cap = new_cap;
-  return true;
-}
-
 void deduplicate_level(BlockNode **candidates, size_t count,
                        const uint32_t *text, BlockNode **next_marked,
                        size_t next_cap, size_t *out_marked_count) {
@@ -2037,58 +1993,6 @@ static void print_usage(const char *prog) {
           prog, prog, prog);
 }
 
-static bool build_line_index(const uint32_t *text, size_t len,
-                             size_t **out_starts, size_t *out_count) {
-  if (!out_starts || !out_count)
-    return false;
-  *out_starts = nullptr;
-  *out_count = 0;
-
-  size_t *starts = nullptr;
-  size_t cap = 0;
-  if (!ensure_size_capacity(&starts, &cap, 1))
-    return false;
-  starts[0] = 0;
-  size_t count = 1;
-
-  for (size_t i = 0; i < len; ++i) {
-    if (text[i] == (uint32_t)'\n') {
-      if (!ensure_size_capacity(&starts, &cap, count + 1)) {
-        free(starts);
-        return false;
-      }
-      starts[count++] = i + 1;
-    }
-  }
-
-  *out_starts = starts;
-  *out_count = count;
-  return true;
-}
-
-static void line_col_for_pos(const size_t *starts, size_t count, size_t pos,
-                             size_t *out_line, size_t *out_col) {
-  if (!out_line || !out_col)
-    return;
-  if (!starts || count == 0) {
-    *out_line = 1;
-    *out_col = pos + 1;
-    return;
-  }
-  size_t lo = 0;
-  size_t hi = count;
-  while (lo + 1 < hi) {
-    size_t mid = lo + (hi - lo) / 2;
-    if (starts[mid] <= pos) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-  *out_line = lo + 1;
-  *out_col = pos - starts[lo] + 1;
-}
-
 static bool build_utf8_checkpoints(const char8_t *input, size_t len,
                                    size_t stride, size_t text_len,
                                    size_t **out_offsets,
@@ -2233,6 +2137,77 @@ static bool file_text_advance(SearchFile *file, uint32_t *out) {
   return true;
 }
 
+static bool read_next_codepoint(FILE *fp, uint32_t *out) {
+  if (!fp || !out)
+    return false;
+  long start = ftell(fp);
+  if (start < 0)
+    return false;
+  int c0 = fgetc(fp);
+  if (c0 == EOF)
+    return false;
+  uint8_t b0 = (uint8_t)c0;
+  uint32_t codepoint = 0xFFFD;
+  bool valid = false;
+
+  if (b0 < 0x80) {
+    codepoint = b0;
+    valid = true;
+  } else if ((b0 & 0xE0) == 0xC0) {
+    uint8_t b1 = 0;
+    if (fread(&b1, 1, 1, fp) == 1) {
+      if ((b1 & 0xC0) == 0x80) {
+        codepoint = ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(b1 & 0x3F);
+        if (codepoint >= 0x80) {
+          valid = true;
+        } else {
+          codepoint = 0xFFFD;
+        }
+      }
+    }
+  } else if ((b0 & 0xF0) == 0xE0) {
+    uint8_t b1 = 0;
+    uint8_t b2 = 0;
+    if (fread(&b1, 1, 1, fp) == 1 && fread(&b2, 1, 1, fp) == 1) {
+      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
+        codepoint = ((uint32_t)(b0 & 0x0F) << 12) |
+                    ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
+        if (codepoint >= 0x800 && (codepoint < 0xD800 || codepoint > 0xDFFF)) {
+          valid = true;
+        } else {
+          codepoint = 0xFFFD;
+        }
+      }
+    }
+  } else if ((b0 & 0xF8) == 0xF0) {
+    uint8_t b1 = 0;
+    uint8_t b2 = 0;
+    uint8_t b3 = 0;
+    if (fread(&b1, 1, 1, fp) == 1 && fread(&b2, 1, 1, fp) == 1 &&
+        fread(&b3, 1, 1, fp) == 1) {
+      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 &&
+          (b3 & 0xC0) == 0x80) {
+        codepoint = ((uint32_t)(b0 & 0x07) << 18) |
+                    ((uint32_t)(b1 & 0x3F) << 12) |
+                    ((uint32_t)(b2 & 0x3F) << 6) | (uint32_t)(b3 & 0x3F);
+        if (codepoint >= 0x10000 && codepoint <= 0x10FFFF) {
+          valid = true;
+        } else {
+          codepoint = 0xFFFD;
+        }
+      }
+    }
+  }
+
+  if (!valid) {
+    if (fseek(fp, start + 1, SEEK_SET) != 0)
+      return false;
+  }
+
+  *out = codepoint;
+  return true;
+}
+
 static bool file_text_at(SearchFile *file, size_t pos, uint32_t *out) {
   if (!file || !out || pos >= file->text_len)
     return false;
@@ -2283,21 +2258,11 @@ static void free_search_file(SearchFile *file) {
   free(file->name);
   free(file->input_path);
   free(file->text);
-  free(file->line_starts);
   free(file->checkpoints);
   if (file->fp) {
     fclose(file->fp);
   }
   memset(file, 0, sizeof(*file));
-}
-
-static void free_search_files(SearchFile *files, size_t count) {
-  if (!files)
-    return;
-  for (size_t i = 0; i < count; ++i) {
-    free_search_file(&files[i]);
-  }
-  free(files);
 }
 
 static bool load_search_file(SearchFile *file, Arena *arena,
@@ -2340,13 +2305,6 @@ static bool load_search_file(SearchFile *file, Arena *arena,
     return false;
   }
 
-  if (!build_line_index(file->text, file->text_len, &file->line_starts,
-                        &file->line_count)) {
-    free(raw_text);
-    free_search_file(file);
-    return false;
-  }
-
   if (!build_utf8_checkpoints(raw_text, byte_len, SEARCH_CHECKPOINT_STRIDE,
                               file->text_len, &file->checkpoints,
                               &file->checkpoint_count)) {
@@ -2379,26 +2337,45 @@ static size_t search_file_for_query(SearchFile *file,
   if (file->text_len < query_len)
     return 0;
 
+  FILE *seq_fp = fopen(file->input_path, "rb");
+  if (!seq_fp) {
+    fprintf(stderr, "Failed to open file for line scan: %s\n",
+            file->input_path);
+    return 0;
+  }
+
+  size_t line = 1;
+  size_t col = 1;
   file->cursor_valid = false;
   size_t hits = 0;
   uint32_t first = query[0];
   for (size_t i = 0; i + query_len <= file->text_len; ++i) {
-    if (query_access_file(file->root, i, file) != first)
-      continue;
-    size_t j = 1;
-    for (; j < query_len; ++j) {
-      if (query_access_file(file->root, i + j, file) != query[j]) {
-        break;
+    bool matched = (query_access_file(file->root, i, file) == first);
+    if (matched) {
+      for (size_t j = 1; j < query_len; ++j) {
+        if (query_access_file(file->root, i + j, file) != query[j]) {
+          matched = false;
+          break;
+        }
       }
     }
-    if (j == query_len) {
-      size_t line = 0;
-      size_t col = 0;
-      line_col_for_pos(file->line_starts, file->line_count, i, &line, &col);
+    if (matched) {
       printf("%s:%zu:%zu\n", file->input_path, line, col);
       hits++;
     }
+
+    uint32_t seq_cp = 0;
+    if (!read_next_codepoint(seq_fp, &seq_cp)) {
+      break;
+    }
+    if (seq_cp == (uint32_t)'\n') {
+      line++;
+      col = 1;
+    } else {
+      col++;
+    }
   }
+  fclose(seq_fp);
   return hits;
 }
 
@@ -2632,7 +2609,6 @@ static bool verify_deduped_lines(const char8_t *input, size_t len,
 }
 
 static int run_search(const char *prog, int argc, char **argv) {
-  double start_time = now_seconds();
   const char *input_dir = nullptr;
   const char *mask = DEFAULT_MASK;
   bool mask_set = false;
@@ -2730,95 +2706,15 @@ static int run_search(const char *prog, int argc, char **argv) {
     return 1;
   }
 
-  Arena *search_arena = arena_create(ARENA_BLOCK_SIZE);
-  if (!search_arena) {
-    fprintf(stderr, "Failed to allocate search arena.\n");
-    return 1;
-  }
-
-  dir = opendir(input_dir);
-  if (!dir) {
-    fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
-    arena_destroy(search_arena);
-    return 1;
-  }
-
-  SearchFile *files = nullptr;
-  size_t files_count = 0;
-  size_t files_cap = 0;
-  size_t processed = 0;
-  size_t bytes_processed = 0;
-  size_t errors = 0;
-  bool abort_scan = false;
-
-  while ((entry = readdir(dir)) != nullptr) {
-    const char *name = entry->d_name;
-    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
-      continue;
-    }
-    if (fnmatch(mask, name, 0) != 0) {
-      continue;
-    }
-
-    char *input_path = join_path(input_dir, name);
-    if (!input_path) {
-      errors++;
-      processed++;
-      render_progress(processed, matched, bytes_processed, start_time);
-      continue;
-    }
-    if (!is_regular_file(input_path)) {
-      free(input_path);
-      continue;
-    }
-    free(input_path);
-
-    if (limit_set && processed >= file_limit) {
-      break;
-    }
-
-    if (!ensure_search_capacity(&files, &files_cap, files_count + 1)) {
-      fprintf(stderr, "Failed to allocate search index.\n");
-      errors++;
-      abort_scan = true;
-      break;
-    }
-
-    if (!load_search_file(&files[files_count], search_arena, input_dir, name)) {
-      fprintf(stderr, "Failed to index file: %s\n", name);
-      errors++;
-    } else {
-      bytes_processed += files[files_count].byte_len;
-      files_count++;
-    }
-
-    processed++;
-    render_progress(processed, matched, bytes_processed, start_time);
-  }
-
-  closedir(dir);
-  fprintf(stderr, "\n");
-
-  if (abort_scan) {
-    free_search_files(files, files_count);
-    arena_destroy(search_arena);
-    return 1;
-  }
-
   if (limit_set) {
-    printf("Indexed %zu file(s) (limit %zu), errors %zu\n", files_count,
-           file_limit, errors);
+    printf("Scanning up to %zu file(s).\n", file_limit);
   } else {
-    printf("Indexed %zu file(s), errors %zu\n", files_count, errors);
+    printf("Scanning %zu file(s).\n", matched);
   }
-  if (files_count == 0) {
-    free_search_files(files, files_count);
-    arena_destroy(search_arena);
-    return 1;
-  }
-
   printf("Enter queries to search (empty line or 'exit' to quit).\n");
+
   char line[4096];
+  size_t errors = 0;
   while (true) {
     printf("search> ");
     fflush(stdout);
@@ -2844,15 +2740,69 @@ static int run_search(const char *prog, int argc, char **argv) {
       continue;
     }
 
+    dir = opendir(input_dir);
+    if (!dir) {
+      fprintf(stderr, "Failed to open input directory: %s\n", input_dir);
+      free(query);
+      return 1;
+    }
+
     size_t total_hits = 0;
     size_t files_with_hits = 0;
-    for (size_t i = 0; i < files_count; ++i) {
-      size_t hits = search_file_for_query(&files[i], query, query_len);
+    size_t processed = 0;
+
+    while ((entry = readdir(dir)) != nullptr) {
+      const char *name = entry->d_name;
+      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        continue;
+      }
+      if (fnmatch(mask, name, 0) != 0) {
+        continue;
+      }
+
+      char *input_path = join_path(input_dir, name);
+      if (!input_path) {
+        errors++;
+        continue;
+      }
+      if (!is_regular_file(input_path)) {
+        free(input_path);
+        continue;
+      }
+      free(input_path);
+
+      if (limit_set && processed >= file_limit) {
+        break;
+      }
+
+      Arena *arena = arena_create(SEARCH_ARENA_BLOCK_SIZE);
+      if (!arena) {
+        fprintf(stderr, "Failed to allocate search arena.\n");
+        errors++;
+        break;
+      }
+
+      SearchFile file = {0};
+      if (!load_search_file(&file, arena, input_dir, name)) {
+        fprintf(stderr, "Failed to index file: %s\n", name);
+        errors++;
+        arena_destroy(arena);
+        processed++;
+        continue;
+      }
+
+      size_t hits = search_file_for_query(&file, query, query_len);
       if (hits > 0) {
         total_hits += hits;
         files_with_hits++;
       }
+
+      free_search_file(&file);
+      arena_destroy(arena);
+      processed++;
     }
+
+    closedir(dir);
 
     if (total_hits == 0) {
       printf("No matches found.\n");
@@ -2863,8 +2813,6 @@ static int run_search(const char *prog, int argc, char **argv) {
     free(query);
   }
 
-  free_search_files(files, files_count);
-  arena_destroy(search_arena);
   return errors == 0 ? 0 : 1;
 }
 
