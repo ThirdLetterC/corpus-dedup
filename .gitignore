@@ -1,7 +1,10 @@
 data/
+
 out/
+out2/
 
 corpus_dedup
+corpus_dedup_optimized
 
 *.profraw
 *.profdata

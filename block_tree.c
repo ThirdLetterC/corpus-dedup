@@ -3,10 +3,10 @@
 
 // BLOCK_TREE_THREADS=1 ./corpus_dedup data/kobza_1 out
 
-// llvm-profdata merge -output=block_tree.profdata default.profraw
+// llvm-profdata merge -output=block_tree.profdata default_6674171548242042490_0.profraw
 
-// clang -DHASH_PREFETCH_DISTANCE=384 -std=c2x -O3 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=4 \
-  -fprofile-use=block_tree.profdata sentence_splitter.c block_tree.c -o corpus_dedup 
+// clang -DHASH_PREFETCH_DISTANCE=384 -std=c2x -O3 -mavx2 -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=4 \
+  -fprofile-use=block_tree.profdata sentence_splitter.c block_tree.c -o corpus_dedup_optimized
 
 /**
  * @file block_tree.c

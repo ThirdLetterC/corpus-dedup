@@ -23,14 +23,6 @@ static inline bool is_immediate_terminator(char32_t cp) {
 }
 
 /**
- * @brief Checks if a code point is a Latin sentence terminator.
- * Includes: . ? !
- */
-static inline bool is_latin_terminator(char32_t cp) {
-  return (cp == U'.' || cp == U'?' || cp == U'!');
-}
-
-/**
  * @brief Checks if a code point is standard whitespace.
  * Note: Uses wctype's iswspace but casts safely.
  */
@@ -48,6 +40,14 @@ static inline bool is_basic_white_space(char32_t cp) {
 
 static inline bool is_ascii_white_space(unsigned char c) {
   return c <= 0x20;
+}
+
+static inline const char *skip_ascii_white_space(const char *p,
+                                                 const char *end) {
+  while (p < end && (unsigned char)*p <= 32) {
+    p++;
+  }
+  return p;
 }
 
 static inline size_t decode_utf8(const unsigned char *p, size_t len,
@@ -158,6 +158,8 @@ static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
  */
 static void add_sentence(SentenceList *list, const char *start,
                          size_t length) {
+  if (length == 0)
+    return;
   // Grow capacity if needed
   if (list->count >= list->capacity) {
     size_t new_cap = list->capacity == 0 ? k_init_capacity : list->capacity * 2;
@@ -169,18 +171,8 @@ static void add_sentence(SentenceList *list, const char *start,
     list->capacity = new_cap;
   }
 
-  // Trim leading ASCII whitespace.
-  const char *final_ptr = start;
-  size_t trimmed_len = length;
-  while (trimmed_len > 0 && (unsigned char)*final_ptr <= 32) {
-    final_ptr++;
-    trimmed_len--;
-  }
-
-  if (trimmed_len > 0) {
-    list->sentences[list->count++] =
-        (SentenceSpan){.start = final_ptr, .len = trimmed_len};
-  }
+  list->sentences[list->count++] =
+      (SentenceSpan){.start = start, .len = length};
 }
 
 /**
@@ -194,11 +186,26 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
   if (!text || len == 0)
     return list;
 
+  if (len >= 256) {
+    size_t estimate = len / 128;
+    if (estimate < k_init_capacity)
+      estimate = k_init_capacity;
+    SentenceSpan *reserved =
+        realloc(list.sentences, estimate * sizeof(*list.sentences));
+    if (reserved) {
+      list.sentences = reserved;
+      list.capacity = estimate;
+    }
+  }
+
   const char *cursor = text;
   const char *sentence_start = text;
   const char *end = text + len;
 
   char32_t current_cp, next_cp;
+
+  sentence_start = skip_ascii_white_space(sentence_start, end);
+  cursor = sentence_start;
 
   // We iterate until the cursor hits the end
   while (cursor < end) {
@@ -237,9 +244,11 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
         if (split_here) {
           size_t len = (size_t)(next_cursor - sentence_start);
           add_sentence(&list, sentence_start, len);
-          sentence_start = next_cursor;
+          sentence_start = skip_ascii_white_space(next_cursor, end);
+          cursor = sentence_start;
+        } else {
+          cursor = next_cursor;
         }
-        cursor = next_cursor;
         continue;
       }
     }
@@ -267,17 +276,6 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
 
       if (is_immediate_terminator(current_cp)) {
         split_here = true;
-      } else if (is_latin_terminator(current_cp)) {
-        const char *next_cursor = cursor + bytes_read;
-        size_t next_bytes =
-            decode_utf8((const unsigned char *)next_cursor,
-                        (size_t)(end - next_cursor), &next_cp);
-
-        bool is_end = (next_cursor >= end) || (next_bytes == 0);
-
-        if (is_end || is_basic_white_space(next_cp)) {
-          split_here = true;
-        }
       }
     }
 
@@ -290,7 +288,9 @@ SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
       add_sentence(&list, sentence_start, len);
 
       // Reset start for next sentence
-      sentence_start = next_cursor;
+      sentence_start = skip_ascii_white_space(next_cursor, end);
+      cursor = sentence_start;
+      continue;
     }
 
     // Advance
