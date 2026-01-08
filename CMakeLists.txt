@@ -49,7 +49,7 @@ target_link_libraries(corpus_dedup PRIVATE Threads::Threads)
 
 if(USE_ASM)
   enable_language(ASM_NASM)
-  set(ASM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/asm)
+  set(ASM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/asm)
   set(ASM_DEFS ${PROJECT_INCLUDE_DIR}/block_tree_asm_defs.h)
   set(ASM_OUT
     ${CMAKE_CURRENT_BINARY_DIR}/hash_worker.o
