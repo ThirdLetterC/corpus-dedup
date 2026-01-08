@@ -48,7 +48,7 @@ bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {
     fclose(fp);
     return false;
   }
-  char8_t *buffer = (char8_t *)malloc(alloc_size * sizeof(char8_t));
+  auto *buffer = (char8_t *)calloc(alloc_size, sizeof(char8_t));
   if (!buffer) {
     fprintf(stderr, "Failed to allocate text buffer for: %s\n", path);
     fclose(fp);

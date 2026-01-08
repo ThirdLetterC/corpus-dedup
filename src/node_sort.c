@@ -133,19 +133,19 @@ static bool ensure_radix_workspace(size_t count) {
 
   uint64_t *len_keys = g_radix_ws.len_keys
                            ? realloc(g_radix_ws.len_keys, alloc_u64)
-                           : malloc(alloc_u64);
+                           : calloc(count, sizeof(uint64_t));
   uint64_t *hash_keys = g_radix_ws.hash_keys
                             ? realloc(g_radix_ws.hash_keys, alloc_u64)
-                            : malloc(alloc_u64);
+                            : calloc(count, sizeof(uint64_t));
   uint64_t *len_tmp = g_radix_ws.len_tmp
                           ? realloc(g_radix_ws.len_tmp, alloc_u64)
-                          : malloc(alloc_u64);
+                          : calloc(count, sizeof(uint64_t));
   uint64_t *hash_tmp = g_radix_ws.hash_tmp
                            ? realloc(g_radix_ws.hash_tmp, alloc_u64)
-                           : malloc(alloc_u64);
+                           : calloc(count, sizeof(uint64_t));
   BlockNode **nodes_tmp = g_radix_ws.nodes_tmp
                               ? realloc(g_radix_ws.nodes_tmp, alloc_nodes)
-                              : malloc(alloc_nodes);
+                              : calloc(count, sizeof(BlockNode *));
 
   if (!len_keys || !hash_keys || !len_tmp || !hash_tmp || !nodes_tmp) {
     return false;
@@ -511,12 +511,12 @@ bool radix_sort_block_nodes(BlockNode **items, BlockNode **tmp, size_t count) {
   }
 
   if (!using_workspace) {
-    len_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
-    hash_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
-    len_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
-    hash_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
+    len_keys = (uint64_t *)calloc(count, sizeof(uint64_t));
+    hash_keys = (uint64_t *)calloc(count, sizeof(uint64_t));
+    len_tmp = (uint64_t *)calloc(count, sizeof(uint64_t));
+    hash_tmp = (uint64_t *)calloc(count, sizeof(uint64_t));
     if (!node_tmp) {
-      node_tmp = (BlockNode **)malloc(count * sizeof(BlockNode *));
+      node_tmp = (BlockNode **)calloc(count, sizeof(BlockNode *));
     }
     using_fallback = true;
     if (!len_keys || !hash_keys || !len_tmp || !hash_tmp || !node_tmp) {

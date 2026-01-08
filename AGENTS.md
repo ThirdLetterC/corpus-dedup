@@ -18,7 +18,7 @@
 * **Type Inference:** Use `auto` for variable declarations where the type is obvious from the initializer (e.g., `auto count = get_count();`).
 * **Constants:** Use `constexpr` for compile-time constants instead of `#define` or `static const`.
 * **Prototypes:** `void func()` implies no arguments (deprecated `func(void)` is no longer necessary, though permitted).
-* **Literals:** Use digit separators for readability (e.g., `1_000_000`, `0xCAFE_BABE`). Use binary literals (`0b1010`) for bitmasks.
+* **Literals:** Use digit separators for readability (e.g., `1'000'000`, `0xCAFE_BABE`). Use binary literals (`0b1010`) for bitmasks.
 
 ### Type System
 * **Fixed Width:** Continue to use `<stdint.h>` (`int32_t`, `uint64_t`) over architecture-dependent `long` or `short`.
@@ -110,7 +110,7 @@ void packet_destroy(packet_t *pkt) {
 
 // Example usage
 void usage_example() {
-    constexpr size_t PKT_SIZE = 1_024; // C23 constexpr + digit separator
+    constexpr size_t PKT_SIZE = 1'024; // C23 constexpr + digit separator
     
     packet_t *p = packet_create(PKT_SIZE);
     if (p) {
