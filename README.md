@@ -1,15 +1,16 @@
 # Corpus Deduplication Tool
 
-Parallel Block Tree construction and sentence deduplication tool in ISO C23.
+Parallel Block Tree construction and text deduplication tool (sentence, paragraph, or document level) in ISO C23.
 
 ## Algorithm
 
 High-level pipeline (per run):
 
 1. Scan the input directory for files matching `mask` (default `*.txt`).
-2. Read file bytes, split into sentences, normalize whitespace, and insert into
-   a hash set; write unique sentences to the output file and optionally append
-   duplicates to `duplicates.txt`.
+2. Read file bytes, split into units (sentences by default, or paragraphs /
+   whole-document), normalize whitespace, and insert into a hash set; write
+   unique units to the output file and optionally append duplicates to
+   `duplicates.txt`.
 3. (Optional, `--build-block-tree`) Build a Block Tree over the deduplicated
    text for verification/analysis.
 
@@ -59,7 +60,7 @@ Runtime tuning:
 - `BLOCK_TREE_THREADS` defaults to 1 when unset; set explicitly to run the block
   tree hash workers on more threads.
 - CLI modes:
-  - Dedup: `./corpus_dedup <input_dir> <output_dir> [mask] [--write-duplicates] [--build-block-tree]`
+  - Dedup: `./corpus_dedup <input_dir> <output_dir> [mask] [--dedup-mode <sentence|paragraph|document>] [--write-duplicates] [--build-block-tree]`
   - Verify: `./corpus_dedup --verify <dedup_dir> [mask]`
   - Search: `./corpus_dedup --search <input_dir> [mask] [--limit N]`
 
@@ -69,7 +70,9 @@ like Ninja Multi-Config or Xcode.
 
 Optional flags:
 
-- `--write-duplicates` to write duplicate sentences into `duplicates.txt` in the
+- `--dedup-mode <sentence|paragraph|document>` to choose dedup granularity
+  (default: sentence-level).
+- `--write-duplicates` to write duplicate units into `duplicates.txt` in the
   output directory (disabled by default).
 - `--build-block-tree` to construct a Block Tree over the deduplicated output
   (disabled by default).

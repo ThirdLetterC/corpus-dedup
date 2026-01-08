@@ -36,15 +36,65 @@ typedef struct {
   size_t norm_cap;
 } DedupScratch;
 
+constexpr size_t PARAGRAPH_INIT_CAP = 16;
+
+typedef enum {
+  DEDUP_MODE_SENTENCE,
+  DEDUP_MODE_PARAGRAPH,
+  DEDUP_MODE_DOCUMENT
+} DedupMode;
+
 typedef struct {
   atomic_size_t files_written;
   atomic_size_t files_empty;
-  atomic_size_t unique_sentences;
-  atomic_size_t duplicate_sentences;
+  atomic_size_t unique_units;
+  atomic_size_t duplicate_units;
   atomic_size_t errors;
   atomic_size_t processed;
   atomic_size_t bytes_processed;
 } BatchStats;
+
+static const char *dedup_mode_name(DedupMode mode) {
+  switch (mode) {
+  case DEDUP_MODE_SENTENCE:
+    return "sentence";
+  case DEDUP_MODE_PARAGRAPH:
+    return "paragraph";
+  case DEDUP_MODE_DOCUMENT:
+    return "document";
+  }
+  return "sentence";
+}
+
+static const char *dedup_unit_plural(DedupMode mode) {
+  switch (mode) {
+  case DEDUP_MODE_SENTENCE:
+    return "sentences";
+  case DEDUP_MODE_PARAGRAPH:
+    return "paragraphs";
+  case DEDUP_MODE_DOCUMENT:
+    return "documents";
+  }
+  return "sentences";
+}
+
+static bool parse_dedup_mode(const char *arg, DedupMode *mode) {
+  if (!arg || !mode)
+    return false;
+  if (strcmp(arg, "sentence") == 0) {
+    *mode = DEDUP_MODE_SENTENCE;
+    return true;
+  }
+  if (strcmp(arg, "paragraph") == 0) {
+    *mode = DEDUP_MODE_PARAGRAPH;
+    return true;
+  }
+  if (strcmp(arg, "document") == 0) {
+    *mode = DEDUP_MODE_DOCUMENT;
+    return true;
+  }
+  return false;
+}
 
 static bool ensure_scratch(DedupScratch *scratch, size_t input_len) {
   if (!scratch)
@@ -80,12 +130,103 @@ static bool ensure_scratch(DedupScratch *scratch, size_t input_len) {
   return true;
 }
 
-static bool emit_sentence(const char8_t *data, size_t len, SentenceSet *seen,
-                          mtx_t *seen_lock, char8_t *norm_buf,
-                          size_t norm_cap, char8_t *out_buf, size_t *out_pos,
-                          size_t out_cap, size_t *out_unique,
-                          size_t *out_duplicates, FILE *duplicates_fp,
-                          mtx_t *duplicates_lock) {
+static inline bool is_ascii_space(unsigned char c) { return c <= 0x20; }
+
+static bool has_non_space(const char8_t *data, size_t start, size_t end) {
+  for (size_t i = start; i < end; ++i) {
+    if (!is_ascii_space((unsigned char)data[i]))
+      return true;
+  }
+  return false;
+}
+
+typedef struct {
+  SentenceSpan *items;
+  size_t count;
+  size_t capacity;
+} ParagraphList;
+
+static void free_paragraph_list(ParagraphList *list) {
+  if (!list)
+    return;
+  free(list->items);
+  list->items = nullptr;
+  list->count = 0;
+  list->capacity = 0;
+}
+
+static bool append_paragraph(ParagraphList *list, const char8_t *start,
+                             size_t len) {
+  if (!list || !start || len == 0)
+    return true;
+  if (list->count == list->capacity) {
+    size_t next_cap = list->capacity == 0 ? PARAGRAPH_INIT_CAP : list->capacity;
+    if (list->capacity != 0 && ckd_mul(&next_cap, list->capacity, (size_t)2))
+      return false;
+    size_t alloc_size = 0;
+    if (ckd_mul(&alloc_size, next_cap, sizeof(SentenceSpan)))
+      return false;
+    auto next = (SentenceSpan *)realloc(list->items, alloc_size);
+    if (!next)
+      return false;
+    list->items = next;
+    list->capacity = next_cap;
+  }
+  list->items[list->count++] = (SentenceSpan){.start = start, .len = len};
+  return true;
+}
+
+static bool split_text_to_paragraphs(const char8_t *text, size_t len,
+                                     ParagraphList *out) {
+  if (!out)
+    return false;
+  out->items = nullptr;
+  out->count = 0;
+  out->capacity = 0;
+  if (!text || len == 0)
+    return true;
+
+  size_t paragraph_start = 0;
+  size_t pos = 0;
+  while (pos < len) {
+    size_t line_start = pos;
+    while (pos < len && text[pos] != (char8_t)'\n' &&
+           text[pos] != (char8_t)'\r') {
+      pos++;
+    }
+    size_t line_end = pos;
+    while (pos < len &&
+           (text[pos] == (char8_t)'\n' || text[pos] == (char8_t)'\r')) {
+      pos++;
+    }
+    bool line_blank = !has_non_space(text, line_start, line_end);
+    if (line_blank) {
+      if (paragraph_start < line_start &&
+          has_non_space(text, paragraph_start, line_start)) {
+        if (!append_paragraph(out, text + paragraph_start,
+                              line_start - paragraph_start)) {
+          free_paragraph_list(out);
+          return false;
+        }
+      }
+      paragraph_start = pos;
+    }
+  }
+
+  if (paragraph_start < len && has_non_space(text, paragraph_start, len)) {
+    if (!append_paragraph(out, text + paragraph_start, len - paragraph_start)) {
+      free_paragraph_list(out);
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool emit_unit(const char8_t *data, size_t len, SentenceSet *seen,
+                      mtx_t *seen_lock, char8_t *norm_buf, size_t norm_cap,
+                      char8_t *out_buf, size_t *out_pos, size_t out_cap,
+                      size_t *out_unique, size_t *out_duplicates,
+                      FILE *duplicates_fp, mtx_t *duplicates_lock) {
   size_t norm_len = normalize_sentence(data, len, norm_buf, norm_cap);
   if (norm_len == 0)
     return true;
@@ -127,44 +268,41 @@ static bool emit_sentence(const char8_t *data, size_t len, SentenceSet *seen,
   return true;
 }
 
-static bool deduplicate_sentences(const char8_t *input, size_t len,
-                                  SentenceSet *seen, mtx_t *seen_lock,
-                                  DedupScratch *scratch, char8_t **out,
-                                  size_t *out_len, size_t *out_unique,
-                                  size_t *out_duplicates, FILE *duplicates_fp,
-                                  mtx_t *duplicates_lock) {
-  if (!out || !out_len || !out_unique || !out_duplicates || !seen ||
-      !scratch)
+static bool deduplicate_spans(const char8_t *input, size_t input_len,
+                              const SentenceSpan *spans, size_t span_count,
+                              SentenceSet *seen, mtx_t *seen_lock,
+                              DedupScratch *scratch, char8_t **out,
+                              size_t *out_len, size_t *out_unique,
+                              size_t *out_duplicates, FILE *duplicates_fp,
+                              mtx_t *duplicates_lock) {
+  if (!out || !out_len || !out_unique || !out_duplicates || !seen || !scratch)
     return false;
   *out = nullptr;
   *out_len = 0;
   *out_unique = 0;
   *out_duplicates = 0;
 
-  if (!input || len == 0)
+  if (!input || input_len == 0 || span_count == 0)
     return true;
 
-  if (!ensure_scratch(scratch, len)) {
+  if (!spans)
+    return false;
+
+  if (!ensure_scratch(scratch, input_len)) {
     return false;
   }
 
   size_t out_pos = 0;
-  SentenceList sentences = split_text_to_sentences(input, len);
-
-  for (size_t i = 0; i < sentences.count; ++i) {
-    const char8_t *sentence = sentences.sentences[i].start;
-    size_t sentence_len = sentences.sentences[i].len;
-    if (!emit_sentence(sentence, sentence_len, seen, seen_lock,
-                       scratch->norm_buffer, scratch->norm_cap,
-                       scratch->dedup_buffer, &out_pos, scratch->dedup_cap,
-                       out_unique, out_duplicates, duplicates_fp,
-                       duplicates_lock)) {
-      free_sentence_list(&sentences);
+  for (size_t i = 0; i < span_count; ++i) {
+    const char8_t *segment = spans[i].start;
+    size_t segment_len = spans[i].len;
+    if (!emit_unit(segment, segment_len, seen, seen_lock, scratch->norm_buffer,
+                   scratch->norm_cap, scratch->dedup_buffer, &out_pos,
+                   scratch->dedup_cap, out_unique, out_duplicates,
+                   duplicates_fp, duplicates_lock)) {
       return false;
     }
   }
-
-  free_sentence_list(&sentences);
 
   if (out_pos == 0)
     return true;
@@ -172,6 +310,75 @@ static bool deduplicate_sentences(const char8_t *input, size_t len,
   *out = scratch->dedup_buffer;
   *out_len = out_pos;
   return true;
+}
+
+static bool deduplicate_sentences(const char8_t *input, size_t len,
+                                  SentenceSet *seen, mtx_t *seen_lock,
+                                  DedupScratch *scratch, char8_t **out,
+                                  size_t *out_len, size_t *out_unique,
+                                  size_t *out_duplicates, FILE *duplicates_fp,
+                                  mtx_t *duplicates_lock) {
+  SentenceList sentences = split_text_to_sentences(input, len);
+  bool ok =
+      deduplicate_spans(input, len, sentences.sentences, sentences.count, seen,
+                        seen_lock, scratch, out, out_len, out_unique,
+                        out_duplicates, duplicates_fp, duplicates_lock);
+  free_sentence_list(&sentences);
+  return ok;
+}
+
+static bool deduplicate_paragraphs(const char8_t *input, size_t len,
+                                   SentenceSet *seen, mtx_t *seen_lock,
+                                   DedupScratch *scratch, char8_t **out,
+                                   size_t *out_len, size_t *out_unique,
+                                   size_t *out_duplicates, FILE *duplicates_fp,
+                                   mtx_t *duplicates_lock) {
+  ParagraphList paragraphs = {0};
+  if (!split_text_to_paragraphs(input, len, &paragraphs)) {
+    return false;
+  }
+
+  bool ok = deduplicate_spans(
+      input, len, paragraphs.items, paragraphs.count, seen, seen_lock, scratch,
+      out, out_len, out_unique, out_duplicates, duplicates_fp, duplicates_lock);
+  free_paragraph_list(&paragraphs);
+  return ok;
+}
+
+static bool deduplicate_document(const char8_t *input, size_t len,
+                                 SentenceSet *seen, mtx_t *seen_lock,
+                                 DedupScratch *scratch, char8_t **out,
+                                 size_t *out_len, size_t *out_unique,
+                                 size_t *out_duplicates, FILE *duplicates_fp,
+                                 mtx_t *duplicates_lock) {
+  SentenceSpan single = {.start = input, .len = len};
+  size_t span_count = input && len > 0 ? 1 : 0;
+  return deduplicate_spans(input, len, &single, span_count, seen, seen_lock,
+                           scratch, out, out_len, out_unique, out_duplicates,
+                           duplicates_fp, duplicates_lock);
+}
+
+static bool deduplicate_with_mode(DedupMode mode, const char8_t *input,
+                                  size_t len, SentenceSet *seen,
+                                  mtx_t *seen_lock, DedupScratch *scratch,
+                                  char8_t **out, size_t *out_len,
+                                  size_t *out_unique, size_t *out_duplicates,
+                                  FILE *duplicates_fp, mtx_t *duplicates_lock) {
+  switch (mode) {
+  case DEDUP_MODE_DOCUMENT:
+    return deduplicate_document(input, len, seen, seen_lock, scratch, out,
+                                out_len, out_unique, out_duplicates,
+                                duplicates_fp, duplicates_lock);
+  case DEDUP_MODE_PARAGRAPH:
+    return deduplicate_paragraphs(input, len, seen, seen_lock, scratch, out,
+                                  out_len, out_unique, out_duplicates,
+                                  duplicates_fp, duplicates_lock);
+  case DEDUP_MODE_SENTENCE:
+  default:
+    return deduplicate_sentences(input, len, seen, seen_lock, scratch, out,
+                                 out_len, out_unique, out_duplicates,
+                                 duplicates_fp, duplicates_lock);
+  }
 }
 
 static bool process_text(const char *label, const char8_t *raw_text,
@@ -266,6 +473,7 @@ typedef struct {
   FILE *duplicates_fp;
   mtx_t *duplicates_lock;
   bool build_tree;
+  DedupMode dedup_mode;
   atomic_size_t next_index;
   BatchStats *stats;
   size_t total_files;
@@ -279,7 +487,8 @@ static int batch_worker(void *arg) {
   DedupScratch scratch = {0};
 
   for (;;) {
-    size_t idx = atomic_fetch_add_explicit(&ctx->next_index, 1, memory_order_relaxed);
+    size_t idx =
+        atomic_fetch_add_explicit(&ctx->next_index, 1, memory_order_relaxed);
     if (idx >= ctx->batch_count)
       break;
 
@@ -307,10 +516,10 @@ static int batch_worker(void *arg) {
     size_t file_unique = 0;
     size_t file_duplicates = 0;
 
-    if (!deduplicate_sentences(item->raw_text, item->byte_len, ctx->seen,
-                               ctx->seen_lock, &scratch, &deduped, &deduped_len,
-                               &file_unique, &file_duplicates, ctx->duplicates_fp,
-                               ctx->duplicates_lock)) {
+    if (!deduplicate_with_mode(ctx->dedup_mode, item->raw_text, item->byte_len,
+                               ctx->seen, ctx->seen_lock, &scratch, &deduped,
+                               &deduped_len, &file_unique, &file_duplicates,
+                               ctx->duplicates_fp, ctx->duplicates_lock)) {
       fprintf(stderr, "Failed to deduplicate content for: %s\n", item->name);
       atomic_fetch_add_explicit(&ctx->stats->errors, 1, memory_order_relaxed);
       free(item->raw_text);
@@ -319,13 +528,14 @@ static int batch_worker(void *arg) {
       goto finish_file;
     }
 
-    atomic_fetch_add_explicit(&ctx->stats->unique_sentences, file_unique,
+    atomic_fetch_add_explicit(&ctx->stats->unique_units, file_unique,
                               memory_order_relaxed);
-    atomic_fetch_add_explicit(&ctx->stats->duplicate_sentences, file_duplicates,
+    atomic_fetch_add_explicit(&ctx->stats->duplicate_units, file_duplicates,
                               memory_order_relaxed);
 
     if (deduped_len == 0) {
-      atomic_fetch_add_explicit(&ctx->stats->files_empty, 1, memory_order_relaxed);
+      atomic_fetch_add_explicit(&ctx->stats->files_empty, 1,
+                                memory_order_relaxed);
       free(item->raw_text);
       free(item->name);
       free(item->input_path);
@@ -351,7 +561,8 @@ static int batch_worker(void *arg) {
       goto finish_file;
     }
 
-    atomic_fetch_add_explicit(&ctx->stats->files_written, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&ctx->stats->files_written, 1,
+                              memory_order_relaxed);
 
     if (ctx->build_tree) {
       if (ctx->tree_lock)
@@ -374,13 +585,15 @@ static int batch_worker(void *arg) {
       atomic_fetch_add_explicit(&ctx->stats->bytes_processed, processed_bytes,
                                 memory_order_relaxed);
     }
-    size_t processed =
-        atomic_fetch_add_explicit(&ctx->stats->processed, 1, memory_order_relaxed) + 1;
+    size_t processed = atomic_fetch_add_explicit(&ctx->stats->processed, 1,
+                                                 memory_order_relaxed) +
+                       1;
     if (ctx->progress_lock) {
       mtx_lock(ctx->progress_lock);
-      size_t current_bytes =
-          atomic_load_explicit(&ctx->stats->bytes_processed, memory_order_relaxed);
-      render_progress(processed, ctx->total_files, current_bytes, ctx->start_time);
+      size_t current_bytes = atomic_load_explicit(&ctx->stats->bytes_processed,
+                                                  memory_order_relaxed);
+      render_progress(processed, ctx->total_files, current_bytes,
+                      ctx->start_time);
       mtx_unlock(ctx->progress_lock);
     }
   }
@@ -394,9 +607,9 @@ static bool process_batch(FileItem *batch, size_t batch_count,
                           const char *output_dir, SentenceSet *seen,
                           mtx_t *seen_lock, FILE *duplicates_fp,
                           mtx_t *duplicates_lock, bool build_tree,
-                          BatchStats *stats, size_t total_files,
-                          double start_time, mtx_t *progress_lock,
-                          mtx_t *tree_lock) {
+                          DedupMode dedup_mode, BatchStats *stats,
+                          size_t total_files, double start_time,
+                          mtx_t *progress_lock, mtx_t *tree_lock) {
   if (!batch || batch_count == 0)
     return true;
 
@@ -414,6 +627,7 @@ static bool process_batch(FileItem *batch, size_t batch_count,
                        .duplicates_fp = duplicates_fp,
                        .duplicates_lock = duplicates_lock,
                        .build_tree = build_tree,
+                       .dedup_mode = dedup_mode,
                        .stats = stats,
                        .total_files = total_files,
                        .start_time = start_time,
@@ -455,6 +669,7 @@ int run_dedup(int argc, char **argv) {
   bool mask_set = false;
   bool write_duplicates = false;
   bool build_block_tree_flag = false;
+  DedupMode dedup_mode = DEDUP_MODE_SENTENCE;
 
   for (int i = 1; i < argc; ++i) {
     const char *arg = argv[i];
@@ -466,10 +681,28 @@ int run_dedup(int argc, char **argv) {
       build_block_tree_flag = true;
       continue;
     }
+    if (strcmp(arg, "--dedup-mode") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(
+            stderr,
+            "--dedup-mode requires one of: sentence, paragraph, document\n");
+        return 1;
+      }
+      const char *mode_arg = argv[++i];
+      if (!parse_dedup_mode(mode_arg, &dedup_mode)) {
+        fprintf(stderr,
+                "Invalid --dedup-mode value: %s (expected sentence, paragraph, "
+                "or document)\n",
+                mode_arg);
+        return 1;
+      }
+      continue;
+    }
     if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
       printf("Usage:\n"
-             "  %s <input_dir> <output_dir> [mask] [--write-duplicates] "
-             "[--build-block-tree]\n"
+             "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
+             "<sentence|paragraph|document>] "
+             "[--write-duplicates] [--build-block-tree]\n"
              "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
              "RADIX_SORT_USE_ASM=%d\n",
              argv[0], WAVESORT_USE_ASM, HASH_WORKER_USE_ASM,
@@ -491,8 +724,9 @@ int run_dedup(int argc, char **argv) {
     }
     fprintf(stderr, "Unexpected argument: %s\n", arg);
     printf("Usage:\n"
-           "  %s <input_dir> <output_dir> [mask] [--write-duplicates] "
-           "[--build-block-tree]\n"
+           "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
+           "<sentence|paragraph|document>] "
+           "[--write-duplicates] [--build-block-tree]\n"
            "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
            "RADIX_SORT_USE_ASM=%d\n",
            argv[0], WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
@@ -501,8 +735,9 @@ int run_dedup(int argc, char **argv) {
 
   if (!input_dir || !output_dir) {
     printf("Usage:\n"
-           "  %s <input_dir> <output_dir> [mask] [--write-duplicates] "
-           "[--build-block-tree]\n",
+           "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
+           "<sentence|paragraph|document>] "
+           "[--write-duplicates] [--build-block-tree]\n",
            argv[0]);
     return 1;
   }
@@ -647,8 +882,8 @@ int run_dedup(int argc, char **argv) {
   BatchStats stats = {0};
   atomic_init(&stats.files_written, 0);
   atomic_init(&stats.files_empty, 0);
-  atomic_init(&stats.unique_sentences, 0);
-  atomic_init(&stats.duplicate_sentences, 0);
+  atomic_init(&stats.unique_units, 0);
+  atomic_init(&stats.duplicate_units, 0);
   atomic_init(&stats.errors, 0);
   atomic_init(&stats.processed, 0);
   atomic_init(&stats.bytes_processed, 0);
@@ -691,12 +926,13 @@ int run_dedup(int argc, char **argv) {
           items[i + j].input_path = nullptr;
         }
 
-        if (!process_batch(
-                batch, batch_count, output_dir, &seen, &seen_lock, duplicates_fp,
-                duplicates_lock_init ? &duplicates_lock : nullptr,
-                build_block_tree_flag, &stats, items_count, start_time,
-                progress_lock_init ? &progress_lock : nullptr,
-                tree_lock_init ? &tree_lock : nullptr)) {
+        if (!process_batch(batch, batch_count, output_dir, &seen, &seen_lock,
+                           duplicates_fp,
+                           duplicates_lock_init ? &duplicates_lock : nullptr,
+                           build_block_tree_flag, dedup_mode, &stats,
+                           items_count, start_time,
+                           progress_lock_init ? &progress_lock : nullptr,
+                           tree_lock_init ? &tree_lock : nullptr)) {
           abort_scan = true;
           break;
         }
@@ -748,23 +984,24 @@ int run_dedup(int argc, char **argv) {
       atomic_load_explicit(&stats.files_written, memory_order_relaxed);
   size_t files_empty =
       atomic_load_explicit(&stats.files_empty, memory_order_relaxed);
-  size_t unique_sentences =
-      atomic_load_explicit(&stats.unique_sentences, memory_order_relaxed);
-  size_t duplicate_sentences =
-      atomic_load_explicit(&stats.duplicate_sentences, memory_order_relaxed);
+  size_t unique_units =
+      atomic_load_explicit(&stats.unique_units, memory_order_relaxed);
+  size_t duplicate_units =
+      atomic_load_explicit(&stats.duplicate_units, memory_order_relaxed);
   size_t worker_errors =
       atomic_load_explicit(&stats.errors, memory_order_relaxed);
   size_t total_errors = errors + worker_errors;
-  size_t total_sentences = unique_sentences + duplicate_sentences;
+  size_t total_units = unique_units + duplicate_units;
   double duplicate_pct =
-      total_sentences == 0
-          ? 0.0
-          : (double)duplicate_sentences * 100.0 / (double)total_sentences;
+      total_units == 0 ? 0.0
+                       : (double)duplicate_units * 100.0 / (double)total_units;
 
-  printf("\nDedup summary: matched %zu file(s), wrote %zu, empty %zu, unique "
-         "sentences %zu, "
-         "duplicate sentences %zu (%.2f%%), errors %zu, elapsed %.2f min\n",
-         matched, files_written, files_empty, unique_sentences,
-         duplicate_sentences, duplicate_pct, total_errors, elapsed_min);
+  const char *unit_label = dedup_unit_plural(dedup_mode);
+  printf("\nDedup summary (%s-level): matched %zu file(s), wrote %zu, empty "
+         "%zu, unique %s %zu, duplicate %s %zu (%.2f%%), errors %zu, "
+         "elapsed %.2f min\n",
+         dedup_mode_name(dedup_mode), matched, files_written, files_empty,
+         unit_label, unique_units, unit_label, duplicate_units, duplicate_pct,
+         total_errors, elapsed_min);
   return total_errors == 0 ? 0 : 1;
 }
