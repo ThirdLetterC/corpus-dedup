@@ -1,16 +1,19 @@
 // nasm -f elf64 -O3 wavesort.asm -o wavesort.o
 // clang -x assembler-with-cpp -c -DHASH_UNROLL=8 -DHASH_PREFETCH_DISTANCE=256 \
 //   hash_worker.asm -o hash_worker.o
-// clang -x assembler-with-cpp -c radix_histogram_length.asm -o radix_histogram_length.o
-// clang -x assembler-with-cpp -c radix_scatter_length.asm -o radix_scatter_length.o
-// clang -x assembler-with-cpp -c radix_histogram_block_id.asm -o radix_histogram_block_id.o
-// clang -x assembler-with-cpp -c radix_scatter_block_id.asm -o radix_scatter_block_id.o
+// clang -x assembler-with-cpp -c radix_histogram_length.asm -o
+// radix_histogram_length.o clang -x assembler-with-cpp -c
+// radix_scatter_length.asm -o radix_scatter_length.o clang -x
+// assembler-with-cpp -c radix_histogram_block_id.asm -o
+// radix_histogram_block_id.o clang -x assembler-with-cpp -c
+// radix_scatter_block_id.asm -o radix_scatter_block_id.o
 //
 // clang -DWAVESORT_USE_ASM=1 -DHASH_PREFETCH_DISTANCE=256 -std=c2x -O3 -mavx2 \
 //   -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
 //   -fprofile-generate block_tree.c sentence_splitter.c hash_worker.o \
 //   radix_histogram_length.o radix_scatter_length.o \
-//   radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o corpus_dedup
+//   radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o
+//   corpus_dedup
 //
 // BLOCK_TREE_THREADS=1 ./corpus_dedup data/kobza_1 out
 //
@@ -20,7 +23,8 @@
 //   -march=native -flto=thin -fuse-ld=lld -pthread -DNDEBUG -DHASH_UNROLL=8 \
 //   -fprofile-use=block_tree.profdata block_tree.c sentence_splitter.c \
 //   hash_worker.o radix_histogram_length.o radix_scatter_length.o \
-//   radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o corpus_dedup
+//   radix_histogram_block_id.o radix_scatter_block_id.o wavesort.o -o
+//   corpus_dedup
 
 #include <assert.h>
 #include <dirent.h>
@@ -39,11 +43,11 @@
 #include <sys/stat.h>
 #include <threads.h>
 #include <time.h>
-#include <unistd.h>
 #include <uchar.h>
+#include <unistd.h>
 
-#include "sentence_splitter.h"
 #include "block_tree_asm_defs.h"
+#include "sentence_splitter.h"
 
 // ==========================================
 // 1. Constants & Configuration
@@ -1353,8 +1357,8 @@ static size_t utf8_decode_advance(const uint8_t *bytes, size_t len,
     uint8_t b1 = bytes[1];
     uint8_t b2 = bytes[2];
     if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
-      codepoint = ((uint32_t)(b0 & 0x0F) << 12) |
-                  ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
+      codepoint = ((uint32_t)(b0 & 0x0F) << 12) | ((uint32_t)(b1 & 0x3F) << 6) |
+                  (uint32_t)(b2 & 0x3F);
       if (codepoint >= 0x800 && (codepoint < 0xD800 || codepoint > 0xDFFF)) {
         advance = 3;
       } else {
@@ -1365,11 +1369,10 @@ static size_t utf8_decode_advance(const uint8_t *bytes, size_t len,
     uint8_t b1 = bytes[1];
     uint8_t b2 = bytes[2];
     uint8_t b3 = bytes[3];
-    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 &&
-        (b3 & 0xC0) == 0x80) {
+    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
       codepoint = ((uint32_t)(b0 & 0x07) << 18) |
-                  ((uint32_t)(b1 & 0x3F) << 12) |
-                  ((uint32_t)(b2 & 0x3F) << 6) | (uint32_t)(b3 & 0x3F);
+                  ((uint32_t)(b1 & 0x3F) << 12) | ((uint32_t)(b2 & 0x3F) << 6) |
+                  (uint32_t)(b3 & 0x3F);
       if (codepoint >= 0x10000 && codepoint <= 0x10FFFF) {
         advance = 4;
       } else {
@@ -2028,8 +2031,7 @@ static bool ensure_search_capacity(SearchFile **buffer, size_t *cap,
   return true;
 }
 
-static bool ensure_u32_capacity(uint32_t **buffer, size_t *cap,
-                                size_t needed) {
+static bool ensure_u32_capacity(uint32_t **buffer, size_t *cap, size_t needed) {
   if (*cap >= needed)
     return true;
   size_t new_cap = *cap ? *cap : 1024;
@@ -2225,9 +2227,8 @@ static int search_worker(void *arg) {
     bool file_hit = false;
 
     for (size_t i = file_start; i + worker->query_len <= file_end; ++i) {
-      uint64_t window =
-          worker->prefix[i + worker->query_len] -
-          worker->prefix[i] * worker->pow[worker->query_len];
+      uint64_t window = worker->prefix[i + worker->query_len] -
+                        worker->prefix[i] * worker->pow[worker->query_len];
       if (window == worker->query_hash) {
         bool matched = (query_access(worker->root, i, worker->text) == first);
         if (matched) {
@@ -2331,17 +2332,18 @@ static size_t search_global_for_query(const BlockNode *root, SearchFile *files,
     }
     if (end > count)
       end = count;
-    workers[i] = (SearchWorker){.root = root,
-                               .files = files,
-                               .start_idx = start,
-                               .end_idx = end,
-                               .text = text,
-                               .prefix = prefix,
-                               .pow = pow,
-                               .query = query,
-                               .query_len = query_len,
-                               .query_hash = query_hash,
-                               .print_lock = have_lock ? &print_lock : nullptr};
+    workers[i] =
+        (SearchWorker){.root = root,
+                       .files = files,
+                       .start_idx = start,
+                       .end_idx = end,
+                       .text = text,
+                       .prefix = prefix,
+                       .pow = pow,
+                       .query = query,
+                       .query_len = query_len,
+                       .query_hash = query_hash,
+                       .print_lock = have_lock ? &print_lock : nullptr};
     if (thread_count == 1) {
       search_worker(&workers[i]);
     } else if (thrd_create(&threads[i], search_worker, &workers[i]) ==
@@ -2451,10 +2453,10 @@ static bool process_batch(FileItem *batch, size_t batch_count,
                           const char *output_dir, SentenceSet *seen,
                           FILE *duplicates_fp, bool build_block_tree,
                           size_t *files_written, size_t *files_empty,
-                          size_t *unique_sentences,
-                          size_t *duplicate_sentences, size_t *errors,
-                          size_t *processed, size_t *bytes_processed,
-                          size_t total_files, double start_time) {
+                          size_t *unique_sentences, size_t *duplicate_sentences,
+                          size_t *errors, size_t *processed,
+                          size_t *bytes_processed, size_t total_files,
+                          double start_time) {
   if (!batch || batch_count == 0)
     return true;
 
@@ -2803,8 +2805,8 @@ static int run_search(const char *prog, int argc, char **argv) {
     return 1;
   }
 
-  BlockNode *root = build_block_tree(global_text, global_len, 2, 2,
-                                     search_arena);
+  BlockNode *root =
+      build_block_tree(global_text, global_len, 2, 2, search_arena);
   if (!root) {
     fprintf(stderr, "Failed to build search block tree.\n");
     free(prefix);

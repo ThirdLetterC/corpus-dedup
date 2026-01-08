@@ -461,8 +461,8 @@ int main(void) {
       "Hello World. This is a test... with numbers 3.14 included. "
       "Also some Japanese: これはテストです。Unicode is handled correctly!";
 
-  SentenceList results = split_text_to_sentences((const char8_t *)article,
-                                                 strlen(article));
+  SentenceList results =
+      split_text_to_sentences((const char8_t *)article, strlen(article));
 
   printf("Found %zu sentences:\n", results.count);
   for (size_t i = 0; i < results.count; i++) {
