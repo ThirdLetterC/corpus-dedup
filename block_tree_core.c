@@ -26,11 +26,9 @@ static constexpr uint64_t HASH_MULT_POW3 = (uint64_t)HASH_MULT_POW3_IMM;
 static constexpr uint64_t HASH_MULT_POW4 = (uint64_t)HASH_MULT_POW4_IMM;
 #endif
 
-#if !HASH_WORKER_USE_ASM
-static const uint64_t *g_prefix_table = nullptr;
-static const uint64_t *g_pow_table = nullptr;
-static size_t g_prefix_size = 0;
-#endif
+const uint64_t *g_prefix_table = nullptr;
+const uint64_t *g_pow_table = nullptr;
+size_t g_prefix_size = 0;
 
 static size_t parse_thread_env() {
   const char *env = getenv("BLOCK_TREE_THREADS");
@@ -156,7 +154,6 @@ static void free_ctx_cache(void) {
   g_ctx_cache_cap = 0;
 }
 
-#if !HASH_WORKER_USE_ASM
 typedef struct {
   uint64_t *prefix;
   uint64_t *pow;
@@ -203,7 +200,6 @@ static void free_prefix_tables(HashPrefixTables *tables) {
   tables->pow = nullptr;
   tables->size = 0;
 }
-#endif
 
 static ThreadContext *ctx_buffer_acquire(size_t count) {
   if (count == 0)
@@ -228,7 +224,6 @@ static ThreadContext *ctx_buffer_acquire(size_t count) {
 void compute_hashes_parallel(BlockNode **candidates, size_t count,
                              const uint32_t *text, size_t len) {
   ThreadContext *ctxs = nullptr;
-#if !HASH_WORKER_USE_ASM
   HashPrefixTables tables = build_prefix_tables(text, len);
   bool have_prefix = tables.prefix && tables.pow;
   if (have_prefix) {
@@ -236,7 +231,6 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
     g_pow_table = tables.pow;
     g_prefix_size = tables.size;
   }
-#endif
 
   if (count == 0)
     goto finish;
@@ -318,12 +312,10 @@ void compute_hashes_parallel(BlockNode **candidates, size_t count,
   }
 
 finish:
-#if !HASH_WORKER_USE_ASM
   g_prefix_table = nullptr;
   g_pow_table = nullptr;
   g_prefix_size = 0;
   free_prefix_tables(&tables);
-#endif
 }
 
 static bool blocks_equal(const BlockNode *a, const BlockNode *b,
