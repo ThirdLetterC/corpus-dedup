@@ -2,7 +2,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 
+#include "ckdint_compat.h"
 #include "block_tree_asm_defs.h"
 #include "config.h"
 
@@ -65,6 +67,98 @@ int compare_nodes(const void *a, const void *b) {
   const BlockNode *const *nodeA = a;
   const BlockNode *const *nodeB = b;
   return compare_node_ptr(*nodeA, *nodeB);
+}
+
+// ==========================================
+// Radix workspace (reuse buffers to avoid per-call malloc)
+// ==========================================
+
+typedef struct {
+  uint64_t *len_keys;
+  uint64_t *hash_keys;
+  uint64_t *len_tmp;
+  uint64_t *hash_tmp;
+  BlockNode **nodes_tmp;
+  size_t cap;
+  mtx_t lock;
+  bool lock_init;
+  bool registered;
+} RadixWorkspace;
+
+static RadixWorkspace g_radix_ws = {0};
+
+static void free_radix_workspace(void) {
+  if (g_radix_ws.lock_init) {
+    mtx_destroy(&g_radix_ws.lock);
+    g_radix_ws.lock_init = false;
+  }
+  free(g_radix_ws.len_keys);
+  free(g_radix_ws.hash_keys);
+  free(g_radix_ws.len_tmp);
+  free(g_radix_ws.hash_tmp);
+  free(g_radix_ws.nodes_tmp);
+  g_radix_ws = (RadixWorkspace){0};
+}
+
+static bool radix_workspace_lock(void) {
+  if (!g_radix_ws.lock_init) {
+    if (mtx_init(&g_radix_ws.lock, mtx_plain) != thrd_success) {
+      return false;
+    }
+    g_radix_ws.lock_init = true;
+  }
+  if (!g_radix_ws.registered) {
+    atexit(free_radix_workspace);
+    g_radix_ws.registered = true;
+  }
+  return mtx_lock(&g_radix_ws.lock) == thrd_success;
+}
+
+static void radix_workspace_unlock(void) {
+  if (g_radix_ws.lock_init) {
+    mtx_unlock(&g_radix_ws.lock);
+  }
+}
+
+static bool ensure_radix_workspace(size_t count) {
+  if (count <= g_radix_ws.cap) {
+    return true;
+  }
+
+  size_t alloc_u64 = 0;
+  size_t alloc_nodes = 0;
+  if (ckd_mul(&alloc_u64, count, sizeof(uint64_t)))
+    return false;
+  if (ckd_mul(&alloc_nodes, count, sizeof(BlockNode *)))
+    return false;
+
+  uint64_t *len_keys =
+      g_radix_ws.len_keys ? realloc(g_radix_ws.len_keys, alloc_u64)
+                          : malloc(alloc_u64);
+  uint64_t *hash_keys =
+      g_radix_ws.hash_keys ? realloc(g_radix_ws.hash_keys, alloc_u64)
+                           : malloc(alloc_u64);
+  uint64_t *len_tmp =
+      g_radix_ws.len_tmp ? realloc(g_radix_ws.len_tmp, alloc_u64)
+                         : malloc(alloc_u64);
+  uint64_t *hash_tmp =
+      g_radix_ws.hash_tmp ? realloc(g_radix_ws.hash_tmp, alloc_u64)
+                          : malloc(alloc_u64);
+  BlockNode **nodes_tmp =
+      g_radix_ws.nodes_tmp ? realloc(g_radix_ws.nodes_tmp, alloc_nodes)
+                           : malloc(alloc_nodes);
+
+  if (!len_keys || !hash_keys || !len_tmp || !hash_tmp || !nodes_tmp) {
+    return false;
+  }
+
+  g_radix_ws.len_keys = len_keys;
+  g_radix_ws.hash_keys = hash_keys;
+  g_radix_ws.len_tmp = len_tmp;
+  g_radix_ws.hash_tmp = hash_tmp;
+  g_radix_ws.nodes_tmp = nodes_tmp;
+  g_radix_ws.cap = count;
+  return true;
 }
 
 // ==========================================
@@ -393,22 +487,49 @@ bool radix_sort_block_nodes(BlockNode **items, BlockNode **tmp, size_t count) {
     return true;
   }
 
-  uint64_t *len_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
-  uint64_t *hash_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
-  uint64_t *len_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
-  uint64_t *hash_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
-  BlockNode **node_tmp =
-      tmp ? tmp : (BlockNode **)malloc(count * sizeof(BlockNode *));
+  bool using_workspace = false;
+  bool using_fallback = false;
+  uint64_t *len_keys = nullptr;
+  uint64_t *hash_keys = nullptr;
+  uint64_t *len_tmp = nullptr;
+  uint64_t *hash_tmp = nullptr;
+  BlockNode **node_tmp = tmp;
 
-  if (!len_keys || !hash_keys || !len_tmp || !hash_tmp || !node_tmp) {
-    free(len_keys);
-    free(hash_keys);
-    free(len_tmp);
-    free(hash_tmp);
-    if (!tmp)
-      free(node_tmp);
-    wavesort_block_nodes(items, tmp, count);
-    return true;
+  if (radix_workspace_lock()) {
+    if (ensure_radix_workspace(count)) {
+      using_workspace = true;
+      len_keys = g_radix_ws.len_keys;
+      hash_keys = g_radix_ws.hash_keys;
+      len_tmp = g_radix_ws.len_tmp;
+      hash_tmp = g_radix_ws.hash_tmp;
+      if (!node_tmp) {
+        node_tmp = g_radix_ws.nodes_tmp;
+      }
+    } else {
+      radix_workspace_unlock();
+    }
+  }
+
+  if (!using_workspace) {
+    len_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
+    hash_keys = (uint64_t *)malloc(count * sizeof(uint64_t));
+    len_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
+    hash_tmp = (uint64_t *)malloc(count * sizeof(uint64_t));
+    if (!node_tmp) {
+      node_tmp = (BlockNode **)malloc(count * sizeof(BlockNode *));
+    }
+    using_fallback = true;
+    if (!len_keys || !hash_keys || !len_tmp || !hash_tmp || !node_tmp) {
+      free(len_keys);
+      free(hash_keys);
+      free(len_tmp);
+      free(hash_tmp);
+      if (!tmp) {
+        free(node_tmp);
+      }
+      wavesort_block_nodes(items, tmp, count);
+      return true;
+    }
   }
 
   for (size_t i = 0; i < count; ++i) {
@@ -460,11 +581,17 @@ bool radix_sort_block_nodes(BlockNode **items, BlockNode **tmp, size_t count) {
     memcpy(items, nodes_src, count * sizeof(*items));
   }
 
-  free(len_keys);
-  free(hash_keys);
-  free(len_tmp);
-  free(hash_tmp);
-  if (!tmp)
-    free(node_tmp);
+  if (using_fallback) {
+    free(len_keys);
+    free(hash_keys);
+    free(len_tmp);
+    free(hash_tmp);
+    if (!tmp) {
+      free(node_tmp);
+    }
+  }
+  if (using_workspace) {
+    radix_workspace_unlock();
+  }
   return true;
 }

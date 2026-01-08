@@ -1,6 +1,6 @@
 # Corpus Deduplication Tool
 
-Parallel Block Tree construction and text deduplication tool (sentence, paragraph, or document level) in ISO C23.
+Parallel Block Tree construction and text deduplication tool (line, sentence, paragraph, or document level) in ISO C23.
 
 ## Algorithm
 
@@ -60,8 +60,8 @@ Runtime tuning:
 - `BLOCK_TREE_THREADS` defaults to 1 when unset; set explicitly to run the block
   tree hash workers on more threads.
 - CLI modes:
-  - Dedup: `./corpus_dedup <input_dir> <output_dir> [mask] [--dedup-mode <sentence|paragraph|document>] [--write-duplicates] [--build-block-tree]`
-  - Verify: `./corpus_dedup --verify <dedup_dir> [mask]`
+- Dedup: `./corpus_dedup <input_dir> <output_dir> [mask] [--dedup-mode <sentence|line|paragraph|document>] [--write-duplicates] [--build-block-tree]`
+  - Verify: `./corpus_dedup --verify <dedup_dir> [mask] [--dedup-mode <sentence|line|paragraph|document>]`
   - Search: `./corpus_dedup --search <input_dir> [mask] [--limit N]`
 
 The executable is named `corpus_dedup` in `build/` (or your chosen build
@@ -70,14 +70,15 @@ like Ninja Multi-Config or Xcode.
 
 Optional flags:
 
-- `--dedup-mode <sentence|paragraph|document>` to choose dedup granularity
+- `--dedup-mode <sentence|line|paragraph|document>` to choose dedup granularity
   (default: sentence-level).
 - `--write-duplicates` to write duplicate units into `duplicates.txt` in the
   output directory (disabled by default).
 - `--build-block-tree` to construct a Block Tree over the deduplicated output
   (disabled by default).
-- `--verify <dedup_dir> [mask]` to scan an already deduplicated folder, verify
-  there are no duplicate sentences, and validate the Block Tree per file.
+- `--verify <dedup_dir> [mask] [--dedup-mode <sentence|line|paragraph|document>]`
+  to scan an already deduplicated folder, ensure there are no duplicate units
+  at the chosen granularity, and validate the Block Tree per file.
 - `--search <input_dir> [mask] [--limit N]` to index matching files into one
   Block Tree (optionally stopping after `N`) and run interactive queries over
   the combined text.

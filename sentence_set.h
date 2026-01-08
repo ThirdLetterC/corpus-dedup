@@ -7,6 +7,7 @@
 #include "utf8.h"
 
 typedef struct SentenceArenaBlock SentenceArenaBlock;
+typedef struct SentenceSetShard SentenceSetShard;
 
 typedef struct {
   SentenceArenaBlock *head;
@@ -14,12 +15,9 @@ typedef struct {
 } SentenceArena;
 
 typedef struct {
-  uint64_t *hashes;
-  size_t *lengths;
-  char8_t **data;
-  uint8_t *ctrl; // 0xFF = empty, otherwise robin-hood probe distance
-  size_t bucket_count;
-  size_t entry_count;
+  SentenceSetShard *shards;
+  size_t shard_count;
+  size_t shard_mask;
   SentenceArena arena;
 } SentenceSet;
 
