@@ -1,7 +1,6 @@
 data/
 
-out/
-out2/
+out*
 
 corpus_dedup
 corpus_dedup_optimized

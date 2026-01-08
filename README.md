@@ -51,3 +51,5 @@ Optional flags:
   output directory (disabled by default).
 - `--build-block-tree` to construct a Block Tree over the deduplicated output
   (disabled by default).
+- `--verify <dedup_dir> [mask]` to scan an already deduplicated folder, verify
+  there are no duplicate sentences, and validate the Block Tree per file.
