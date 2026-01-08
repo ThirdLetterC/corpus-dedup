@@ -1310,11 +1310,11 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
     text = owned_text;
   }
 
-  SentenceList sentences = split_text_to_sentences(text);
+  SentenceList sentences = split_text_to_sentences(text, len);
 
   for (size_t i = 0; i < sentences.count; ++i) {
-    const char *sentence = sentences.sentences[i];
-    size_t sentence_len = strlen(sentence);
+    const char *sentence = sentences.sentences[i].start;
+    size_t sentence_len = sentences.sentences[i].len;
     if (!emit_sentence((const uint8_t *)sentence, sentence_len, seen, norm_buf,
                        len, buffer, &out_pos, out_cap, out_unique,
                        out_duplicates, duplicates_fp)) {

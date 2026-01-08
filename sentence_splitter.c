@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <uchar.h>
-#include <wctype.h>
 
 #if defined(__AVX2__) || defined(__SSE2__)
 #include <immintrin.h>
@@ -35,12 +34,74 @@ static inline bool is_latin_terminator(char32_t cp) {
  * @brief Checks if a code point is standard whitespace.
  * Note: Uses wctype's iswspace but casts safely.
  */
-static inline bool is_white_space(char32_t cp) {
-  return (cp < 0x10000 && iswspace((wint_t)cp));
+static inline bool is_basic_white_space(char32_t cp) {
+  if (cp <= 0x20)
+    return true;
+  if (cp == 0x00A0 || cp == 0x1680 || cp == 0x3000)
+    return true;
+  if (cp >= 0x2000 && cp <= 0x200A)
+    return true;
+  if (cp == 0x2028 || cp == 0x2029 || cp == 0x202F || cp == 0x205F)
+    return true;
+  return false;
 }
 
 static inline bool is_ascii_white_space(unsigned char c) {
   return c <= 0x20;
+}
+
+static inline size_t decode_utf8(const unsigned char *p, size_t len,
+                                 char32_t *out_cp) {
+  if (len == 0)
+    return 0;
+  unsigned char c0 = p[0];
+  if (c0 < 0x80) {
+    *out_cp = (char32_t)c0;
+    return 1;
+  }
+  if ((c0 & 0xE0) == 0xC0) {
+    if (len < 2)
+      return 0;
+    unsigned char c1 = p[1];
+    if ((c1 & 0xC0) != 0x80)
+      return 0;
+    char32_t cp = (char32_t)(((c0 & 0x1F) << 6) | (c1 & 0x3F));
+    if (cp < 0x80)
+      return 0;
+    *out_cp = cp;
+    return 2;
+  }
+  if ((c0 & 0xF0) == 0xE0) {
+    if (len < 3)
+      return 0;
+    unsigned char c1 = p[1];
+    unsigned char c2 = p[2];
+    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80)
+      return 0;
+    char32_t cp = (char32_t)(((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) |
+                             (c2 & 0x3F));
+    if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
+      return 0;
+    *out_cp = cp;
+    return 3;
+  }
+  if ((c0 & 0xF8) == 0xF0) {
+    if (len < 4)
+      return 0;
+    unsigned char c1 = p[1];
+    unsigned char c2 = p[2];
+    unsigned char c3 = p[3];
+    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 ||
+        (c3 & 0xC0) != 0x80)
+      return 0;
+    char32_t cp = (char32_t)(((c0 & 0x07) << 18) | ((c1 & 0x3F) << 12) |
+                             ((c2 & 0x3F) << 6) | (c3 & 0x3F));
+    if (cp < 0x10000 || cp > 0x10FFFF)
+      return 0;
+    *out_cp = cp;
+    return 4;
+  }
+  return 0;
 }
 
 static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
@@ -95,58 +156,47 @@ static inline size_t find_next_event_ascii(const unsigned char *p, size_t len) {
 /**
  * @brief Appends a string slice to the sentence list.
  */
-static void add_sentence(SentenceList *list, const char *start, size_t length) {
+static void add_sentence(SentenceList *list, const char *start,
+                         size_t length) {
   // Grow capacity if needed
   if (list->count >= list->capacity) {
     size_t new_cap = list->capacity == 0 ? k_init_capacity : list->capacity * 2;
-    char **new_data = realloc(list->sentences, new_cap * sizeof(char *));
+    SentenceSpan *new_data =
+        realloc(list->sentences, new_cap * sizeof(*list->sentences));
     if (!new_data)
       return; // Allocation failure handling strategy: skip or crash safely
     list->sentences = new_data;
     list->capacity = new_cap;
   }
 
-  // Allocate and copy the substring
-  char *segment = malloc(length + 1);
-  if (segment) {
-    memcpy(segment, start, length);
-    segment[length] = '\0';
+  // Trim leading ASCII whitespace.
+  const char *final_ptr = start;
+  size_t trimmed_len = length;
+  while (trimmed_len > 0 && (unsigned char)*final_ptr <= 32) {
+    final_ptr++;
+    trimmed_len--;
+  }
 
-    // Simple trim of leading whitespace (optional, but cleaner)
-    char *final_ptr = segment;
-    size_t trimmed_len = length;
-    while (trimmed_len > 0 && (unsigned char)*final_ptr <= 32) {
-      final_ptr++;
-      trimmed_len--;
-    }
-
-    if (final_ptr != segment) {
-      memmove(segment, final_ptr, trimmed_len);
-      segment[trimmed_len] = '\0';
-    }
-
-    if (trimmed_len > 0) {
-      list->sentences[list->count++] = segment;
-    } else {
-      free(segment); // Don't add empty strings
-    }
+  if (trimmed_len > 0) {
+    list->sentences[list->count++] =
+        (SentenceSpan){.start = final_ptr, .len = trimmed_len};
   }
 }
 
 /**
  * @brief Main algorithm to split UTF-8 text into sentences.
- * * @param text Null-terminated UTF-8 source string.
+ * @param text UTF-8 source string (may contain null bytes).
+ * @param len Byte length of the source string.
  * @return SentenceList Structure containing results. User must free.
  */
-SentenceList split_text_to_sentences(const char *restrict text) {
+SentenceList split_text_to_sentences(const char *restrict text, size_t len) {
   SentenceList list = {0};
-  if (!text)
+  if (!text || len == 0)
     return list;
 
-  mbstate_t state = {0};
   const char *cursor = text;
   const char *sentence_start = text;
-  const char *end = text + strlen(text);
+  const char *end = text + len;
 
   char32_t current_cp, next_cp;
 
@@ -175,11 +225,10 @@ SentenceList split_text_to_sentences(const char *restrict text) {
           if (is_ascii_white_space(next_byte)) {
             split_here = true;
           } else if (next_byte >= 0x80) {
-            mbstate_t peek_state = state;
-            size_t next_bytes =
-                mbrtoc32(&next_cp, next_cursor, end - next_cursor, &peek_state);
-            if (next_bytes == 0 || next_bytes == (size_t)-1 ||
-                next_bytes == (size_t)-2 || is_white_space(next_cp)) {
+            size_t next_bytes = decode_utf8(
+                (const unsigned char *)next_cursor,
+                (size_t)(end - next_cursor), &next_cp);
+            if (next_bytes == 0 || is_basic_white_space(next_cp)) {
               split_here = true;
             }
           }
@@ -209,12 +258,10 @@ SentenceList split_text_to_sentences(const char *restrict text) {
       split_here = true;
     } else {
       // 1. Decode current character
-      bytes_read = mbrtoc32(&current_cp, cursor, end - cursor, &state);
+      bytes_read = decode_utf8((const unsigned char *)cursor,
+                               (size_t)(end - cursor), &current_cp);
 
       // Handle decoding errors or incomplete sequences
-      if (bytes_read == (size_t)-1 || bytes_read == (size_t)-2) {
-        break; // Stop on invalid UTF-8
-      }
       if (bytes_read == 0)
         break; // Null terminator
 
@@ -222,13 +269,13 @@ SentenceList split_text_to_sentences(const char *restrict text) {
         split_here = true;
       } else if (is_latin_terminator(current_cp)) {
         const char *next_cursor = cursor + bytes_read;
-        mbstate_t peek_state = state;
         size_t next_bytes =
-            mbrtoc32(&next_cp, next_cursor, end - next_cursor, &peek_state);
+            decode_utf8((const unsigned char *)next_cursor,
+                        (size_t)(end - next_cursor), &next_cp);
 
         bool is_end = (next_cursor >= end) || (next_bytes == 0);
 
-        if (is_end || is_white_space(next_cp)) {
+        if (is_end || is_basic_white_space(next_cp)) {
           split_here = true;
         }
       }
@@ -264,9 +311,6 @@ SentenceList split_text_to_sentences(const char *restrict text) {
 void free_sentence_list(SentenceList *list) {
   if (!list || !list->sentences)
     return;
-  for (size_t i = 0; i < list->count; ++i) {
-    free(list->sentences[i]);
-  }
   free(list->sentences);
   list->sentences = nullptr;
   list->count = 0;
@@ -280,11 +324,12 @@ int main(void) {
       "Hello World. This is a test... with numbers 3.14 included. "
       "Also some Japanese: これはテストです。Unicode is handled correctly!";
 
-  SentenceList results = split_text_to_sentences(article);
+  SentenceList results = split_text_to_sentences(article, strlen(article));
 
   printf("Found %zu sentences:\n", results.count);
   for (size_t i = 0; i < results.count; i++) {
-    printf("[%zu]: %s\n", i + 1, results.sentences[i]);
+    printf("[%zu]: %.*s\n", i + 1, (int)results.sentences[i].len,
+           results.sentences[i].start);
   }
 
   free_sentence_list(&results);

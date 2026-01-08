@@ -4,21 +4,30 @@
 #include <stddef.h>
 
 /**
- * @brief Container for the list of split sentences.
- * Owns the memory of the string array and the strings themselves.
+ * @brief Slice into the original UTF-8 buffer.
  */
 typedef struct {
-  char **sentences;
+  const char *start;
+  size_t len;
+} SentenceSpan;
+
+/**
+ * @brief Container for the list of split sentences.
+ * Owns the memory of the span array (not the underlying text).
+ */
+typedef struct {
+  SentenceSpan *sentences;
   size_t count;
   size_t capacity;
 } SentenceList;
 
 /**
  * @brief Main algorithm to split UTF-8 text into sentences.
- * @param text Null-terminated UTF-8 source string.
+ * @param text UTF-8 source string (may contain null bytes).
+ * @param len Byte length of the source string.
  * @return SentenceList Structure containing results. User must free.
  */
-SentenceList split_text_to_sentences(const char *restrict text);
+SentenceList split_text_to_sentences(const char *restrict text, size_t len);
 
 /**
  * @brief Frees all memory associated with the sentence list.
