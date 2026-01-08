@@ -18,7 +18,6 @@ typedef struct {
   SentenceSetShard *shards;
   size_t shard_count;
   size_t shard_mask;
-  SentenceArena arena;
 } SentenceSet;
 
 [[nodiscard]] bool sentence_set_init(SentenceSet *set, size_t bucket_count);

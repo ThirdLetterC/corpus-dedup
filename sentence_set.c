@@ -21,6 +21,7 @@ typedef struct SentenceSetShard {
   uint8_t *ctrl; // 0xFF = empty, otherwise robin-hood probe distance
   size_t bucket_count;
   size_t entry_count;
+  SentenceArena arena;
   mtx_t lock;
   bool lock_init;
 } SentenceSetShard;
@@ -121,12 +122,13 @@ static void *sentence_arena_alloc(SentenceArena *arena, size_t size) {
   return ptr;
 }
 
-static char8_t *sentence_set_copy_data(SentenceSet *set, const char8_t *data,
-                                       size_t len) {
+static char8_t *sentence_set_copy_data(SentenceSetShard *shard,
+                                       const char8_t *data, size_t len) {
   size_t alloc_size = 0;
   if (ckd_add(&alloc_size, len, (size_t)1))
     return nullptr;
-  char8_t *copy = (char8_t *)sentence_arena_alloc(&set->arena, alloc_size);
+  char8_t *copy =
+      (char8_t *)sentence_arena_alloc(&shard->arena, alloc_size);
   if (!copy)
     return nullptr;
   if (len > 0)
@@ -142,6 +144,7 @@ static void shard_destroy(SentenceSetShard *shard) {
     mtx_destroy(&shard->lock);
     shard->lock_init = false;
   }
+  sentence_arena_destroy(&shard->arena);
   free(shard->hashes);
   free(shard->lengths);
   free(shard->data);
@@ -157,6 +160,7 @@ static void shard_destroy(SentenceSetShard *shard) {
 static bool shard_init(SentenceSetShard *shard, size_t bucket_count) {
   if (!shard)
     return false;
+  sentence_arena_init(&shard->arena, SENTENCE_ARENA_BLOCK_SIZE);
   size_t size = round_up_pow2(bucket_count < MIN_BUCKET_COUNT ? MIN_BUCKET_COUNT
                                                               : bucket_count);
   size_t alloc_hashes = 0;
@@ -196,6 +200,7 @@ static void shard_clear(SentenceSetShard *shard) {
     return;
   memset(shard->ctrl, CTRL_EMPTY, shard->bucket_count * sizeof(uint8_t));
   shard->entry_count = 0;
+  sentence_arena_reset(&shard->arena);
 }
 
 static bool rehash_insert(uint64_t hash, size_t len, char8_t *data,
@@ -246,9 +251,9 @@ static bool rehash_insert(uint64_t hash, size_t len, char8_t *data,
   }
 }
 
-static bool sentence_set_rehash_shard(SentenceSetShard *shard, SentenceSet *set,
+static bool sentence_set_rehash_shard(SentenceSetShard *shard,
                                       size_t new_bucket_count) {
-  if (!shard || !set)
+  if (!shard)
     return false;
   size_t size = round_up_pow2(new_bucket_count < MIN_BUCKET_COUNT
                                   ? MIN_BUCKET_COUNT
@@ -306,11 +311,10 @@ static bool sentence_set_rehash_shard(SentenceSetShard *shard, SentenceSet *set,
   return true;
 }
 
-[[nodiscard]] static bool
-sentence_set_insert_internal(SentenceSetShard *shard, SentenceSet *set,
-                             uint64_t hash, const char8_t *data, size_t len,
-                             bool data_owned, bool *inserted) {
-  if (!shard || !set || !data || !inserted)
+[[nodiscard]] static bool sentence_set_insert_internal(
+    SentenceSetShard *shard, uint64_t hash, const char8_t *data, size_t len,
+    bool data_owned, bool *inserted) {
+  if (!shard || !data || !inserted)
     return false;
 
   size_t idx = hash & (shard->bucket_count - 1);
@@ -324,9 +328,9 @@ sentence_set_insert_internal(SentenceSetShard *shard, SentenceSet *set,
   while (true) {
     uint8_t ctrl = shard->ctrl[idx];
     if (ctrl == CTRL_EMPTY) {
-      char8_t *stored =
-          cand_owned ? (char8_t *)cand_data
-                     : sentence_set_copy_data(set, cand_data, cand_len);
+      char8_t *stored = cand_owned ? (char8_t *)cand_data
+                                   : sentence_set_copy_data(shard, cand_data,
+                                                            cand_len);
       if (!stored)
         return false;
       shard->hashes[idx] = cand_hash;
@@ -350,9 +354,9 @@ sentence_set_insert_internal(SentenceSetShard *shard, SentenceSet *set,
       char8_t *displaced_data = shard->data[idx];
       uint8_t displaced_ctrl = ctrl;
 
-      char8_t *stored =
-          cand_owned ? (char8_t *)cand_data
-                     : sentence_set_copy_data(set, cand_data, cand_len);
+      char8_t *stored = cand_owned ? (char8_t *)cand_data
+                                   : sentence_set_copy_data(shard, cand_data,
+                                                            cand_len);
       if (!stored)
         return false;
       shard->hashes[idx] = cand_hash;
@@ -375,10 +379,10 @@ sentence_set_insert_internal(SentenceSetShard *shard, SentenceSet *set,
       size_t next_size = 0;
       if (ckd_mul(&next_size, shard->bucket_count, (size_t)2))
         return false;
-      if (!sentence_set_rehash_shard(shard, set, next_size))
+      if (!sentence_set_rehash_shard(shard, next_size))
         return false;
-      return sentence_set_insert_internal(shard, set, hash, data, len,
-                                          data_owned, inserted);
+      return sentence_set_insert_internal(shard, hash, data, len, data_owned,
+                                          inserted);
     }
   }
 }
@@ -390,7 +394,6 @@ bool sentence_set_init(SentenceSet *set, size_t bucket_count) {
   size_t shards = choose_shard_count(bucket_count);
   set->shard_count = shards;
   set->shard_mask = shards - 1;
-  sentence_arena_init(&set->arena, SENTENCE_ARENA_BLOCK_SIZE);
 
   set->shards = (SentenceSetShard *)calloc(shards, sizeof(SentenceSetShard));
   if (!set->shards)
@@ -426,7 +429,6 @@ void sentence_set_destroy(SentenceSet *set) {
   set->shards = nullptr;
   set->shard_count = 0;
   set->shard_mask = 0;
-  sentence_arena_destroy(&set->arena);
 }
 
 void sentence_set_clear(SentenceSet *set) {
@@ -435,7 +437,6 @@ void sentence_set_clear(SentenceSet *set) {
   for (size_t i = 0; i < set->shard_count; ++i) {
     shard_clear(&set->shards[i]);
   }
-  sentence_arena_reset(&set->arena);
 }
 
 void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
@@ -482,7 +483,7 @@ void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
     if (shard->lock_init)
       mtx_lock(&shard->lock);
     if (per_needed > shard->bucket_count) {
-      (void)sentence_set_rehash_shard(shard, set, per_needed);
+      (void)sentence_set_rehash_shard(shard, per_needed);
     }
     if (shard->lock_init)
       mtx_unlock(&shard->lock);
@@ -512,11 +513,11 @@ void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
     threshold = 1;
   if (shard->entry_count + 1 > threshold) {
     size_t next_size = shard->bucket_count * 2;
-    (void)sentence_set_rehash_shard(shard, set, next_size);
+    (void)sentence_set_rehash_shard(shard, next_size);
   }
 
   bool ok =
-      sentence_set_insert_internal(shard, set, hash, data, len, false, inserted);
+      sentence_set_insert_internal(shard, hash, data, len, false, inserted);
 
   if (shard->lock_init)
     mtx_unlock(&shard->lock);
