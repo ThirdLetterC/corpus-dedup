@@ -16,6 +16,7 @@
 #include <fnmatch.h>
 #include <inttypes.h>
 #include <stdatomic.h>
+#include <stdbit.h>
 #include <stdbool.h>
 #include <stdckdint.h>
 #include <stddef.h>
@@ -27,12 +28,27 @@
 #include <threads.h>
 #include <time.h>
 #include <unistd.h>
+#include <uchar.h>
 
 #include "sentence_splitter.h"
 
 // ==========================================
 // 1. Constants & Configuration
 // ==========================================
+
+#if defined(__clang__)
+#if __has_feature(c_char8_t)
+#define BLOCK_TREE_HAVE_CHAR8_T 1
+#endif
+#elif defined(__GNUC__)
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define BLOCK_TREE_HAVE_CHAR8_T 1
+#endif
+#endif
+
+#if !defined(BLOCK_TREE_HAVE_CHAR8_T)
+typedef unsigned char char8_t;
+#endif
 
 const uint64_t HASH_MOD =
     4294967296ULL; // 2^32 (Implicit wrap-around logic used)
@@ -119,7 +135,7 @@ typedef struct SentenceEntry SentenceEntry;
 struct SentenceEntry {
   uint64_t hash;
   size_t len;
-  uint8_t *data;
+  char8_t *data;
   SentenceEntry *next;
 };
 
@@ -147,7 +163,7 @@ typedef struct {
 typedef struct {
   char *name;
   char *input_path;
-  uint8_t *raw_text;
+  char8_t *raw_text;
   size_t byte_len;
 } FileItem;
 
@@ -155,7 +171,7 @@ typedef struct {
 // 3. Memory Management (Arena)
 // ==========================================
 
-Arena *arena_create(size_t cap) {
+[[nodiscard]] Arena *arena_create(size_t cap) {
   Arena *a = malloc(sizeof(Arena));
   if (!a)
     return nullptr;
@@ -1371,11 +1387,15 @@ static bool ensure_ptr_capacity(BlockNode ***buffer, size_t *cap,
     return true;
   size_t new_cap = *cap ? *cap : 16;
   while (new_cap < needed) {
-    if (new_cap > SIZE_MAX / 2)
+    size_t next_cap = 0;
+    if (ckd_mul(&next_cap, new_cap, (size_t)2))
       return false;
-    new_cap *= 2;
+    new_cap = next_cap;
   }
-  BlockNode **next = realloc(*buffer, new_cap * sizeof(**buffer));
+  size_t alloc_size = 0;
+  if (ckd_mul(&alloc_size, new_cap, sizeof(**buffer)))
+    return false;
+  BlockNode **next = realloc(*buffer, alloc_size);
   if (!next)
     return false;
   *buffer = next;
@@ -1625,8 +1645,9 @@ uint32_t query_access(const BlockNode *node, size_t i, const uint32_t *text) {
   return (uint32_t)'?';
 }
 
-static bool decode_utf8(const uint8_t *input, size_t len, uint32_t **out,
-                        size_t *out_len, size_t *invalid_count) {
+[[nodiscard]] static bool decode_utf8(const char8_t *input, size_t len,
+                                      uint32_t **out, size_t *out_len,
+                                      size_t *invalid_count) {
   if (!out || !out_len || !invalid_count)
     return false;
   *out = nullptr;
@@ -1642,19 +1663,20 @@ static bool decode_utf8(const uint8_t *input, size_t len, uint32_t **out,
   if (!buffer)
     return false;
 
+  const uint8_t *bytes = (const uint8_t *)input;
   size_t i = 0;
   size_t count = 0;
   size_t invalid = 0;
 
   while (i < len) {
-    uint8_t b0 = input[i];
+    uint8_t b0 = bytes[i];
     uint32_t codepoint = 0xFFFD;
     size_t advance = 1;
 
     if (b0 < 0x80) {
       codepoint = b0;
     } else if ((b0 & 0xE0) == 0xC0 && i + 1 < len) {
-      uint8_t b1 = input[i + 1];
+      uint8_t b1 = bytes[i + 1];
       if ((b1 & 0xC0) == 0x80) {
         codepoint = ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(b1 & 0x3F);
         if (codepoint >= 0x80) {
@@ -1664,8 +1686,8 @@ static bool decode_utf8(const uint8_t *input, size_t len, uint32_t **out,
         }
       }
     } else if ((b0 & 0xF0) == 0xE0 && i + 2 < len) {
-      uint8_t b1 = input[i + 1];
-      uint8_t b2 = input[i + 2];
+      uint8_t b1 = bytes[i + 1];
+      uint8_t b2 = bytes[i + 2];
       if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
         codepoint = ((uint32_t)(b0 & 0x0F) << 12) |
                     ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
@@ -1676,9 +1698,9 @@ static bool decode_utf8(const uint8_t *input, size_t len, uint32_t **out,
         }
       }
     } else if ((b0 & 0xF8) == 0xF0 && i + 3 < len) {
-      uint8_t b1 = input[i + 1];
-      uint8_t b2 = input[i + 2];
-      uint8_t b3 = input[i + 3];
+      uint8_t b1 = bytes[i + 1];
+      uint8_t b2 = bytes[i + 2];
+      uint8_t b3 = bytes[i + 3];
       if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
         codepoint = ((uint32_t)(b0 & 0x07) << 18) |
                     ((uint32_t)(b1 & 0x3F) << 12) |
@@ -1703,16 +1725,23 @@ static bool decode_utf8(const uint8_t *input, size_t len, uint32_t **out,
   return true;
 }
 
-static uint64_t hash_bytes_fnv1a(const uint8_t *data, size_t len) {
+static uint64_t hash_bytes_fnv1a(const char8_t *data, size_t len) {
+  const uint8_t *bytes = (const uint8_t *)data;
   uint64_t hash = 1469598103934665603ULL;
   for (size_t i = 0; i < len; ++i) {
-    hash ^= data[i];
+    hash ^= bytes[i];
     hash *= 1099511628211ULL;
   }
   return hash;
 }
 
 static size_t round_up_pow2(size_t value) {
+#if defined(__STDC_VERSION_STDBIT_H__)
+  size_t rounded = stdc_bit_ceil(value);
+  if (rounded != 0) {
+    return rounded;
+  }
+#endif
   size_t p = 1;
   while (p < value && p <= SIZE_MAX / 2) {
     p <<= 1;
@@ -1775,7 +1804,10 @@ static bool sentence_set_init(SentenceSet *set, size_t bucket_count) {
   if (!set)
     return false;
   size_t size = round_up_pow2(bucket_count < 16 ? 16 : bucket_count);
-  set->buckets = calloc(size, sizeof(*set->buckets));
+  size_t alloc_size = 0;
+  if (ckd_mul(&alloc_size, size, sizeof(*set->buckets)))
+    return false;
+  set->buckets = calloc(1, alloc_size);
   if (!set->buckets)
     return false;
   set->bucket_count = size;
@@ -1796,7 +1828,10 @@ static void sentence_set_destroy(SentenceSet *set) {
 
 static bool sentence_set_rehash(SentenceSet *set, size_t new_bucket_count) {
   size_t size = round_up_pow2(new_bucket_count);
-  SentenceEntry **next = calloc(size, sizeof(*next));
+  size_t alloc_size = 0;
+  if (ckd_mul(&alloc_size, size, sizeof(*set->buckets)))
+    return false;
+  SentenceEntry **next = calloc(1, alloc_size);
   if (!next)
     return false;
 
@@ -1824,12 +1859,16 @@ static void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
   size_t expected = byte_len / avg_sentence;
   if (expected < 16)
     expected = 16;
-  size_t target = set->entry_count + expected;
-  size_t needed;
-  if (target > SIZE_MAX / 4) {
+  size_t target = 0;
+  if (ckd_add(&target, set->entry_count, expected)) {
+    target = SIZE_MAX;
+  }
+  size_t needed = 0;
+  size_t scaled = 0;
+  if (ckd_mul(&scaled, target, (size_t)4)) {
     needed = SIZE_MAX;
   } else {
-    needed = (target * 4) / 3;
+    needed = scaled / 3;
   }
   if (needed <= set->bucket_count)
     return;
@@ -1839,7 +1878,7 @@ static void sentence_set_reserve_for_bytes(SentenceSet *set, size_t byte_len) {
   }
 }
 
-static bool sentence_set_insert(SentenceSet *set, const uint8_t *data,
+static bool sentence_set_insert(SentenceSet *set, const char8_t *data,
                                 size_t len, bool *inserted) {
   if (!set || !data || !inserted)
     return false;
@@ -1862,7 +1901,7 @@ static bool sentence_set_insert(SentenceSet *set, const uint8_t *data,
   if (!mem)
     return false;
   SentenceEntry *entry = (SentenceEntry *)mem;
-  uint8_t *copy = mem + sizeof(SentenceEntry);
+  char8_t *copy = (char8_t *)(mem + sizeof(SentenceEntry));
   if (len > 0)
     memcpy(copy, data, len);
   entry->hash = hash;
@@ -1874,29 +1913,32 @@ static bool sentence_set_insert(SentenceSet *set, const uint8_t *data,
   *inserted = true;
 
   if (set->entry_count > (set->bucket_count * 3) / 4) {
-    sentence_set_rehash(set, set->bucket_count * 2);
+    size_t next_size = 0;
+    if (!ckd_mul(&next_size, set->bucket_count, (size_t)2)) {
+      sentence_set_rehash(set, next_size);
+    }
   }
   return true;
 }
 
-static size_t normalize_sentence(const uint8_t *data, size_t len, uint8_t *out,
+static size_t normalize_sentence(const char8_t *data, size_t len, char8_t *out,
                                  size_t out_cap) {
   size_t start = 0;
-  while (start < len && is_ascii_space(data[start])) {
+  while (start < len && is_ascii_space((unsigned char)data[start])) {
     start++;
   }
   size_t end = len;
-  while (end > start && is_ascii_space(data[end - 1])) {
+  while (end > start && is_ascii_space((unsigned char)data[end - 1])) {
     end--;
   }
 
   size_t out_len = 0;
   bool in_space = false;
   for (size_t i = start; i < end; ++i) {
-    if (is_ascii_space(data[i])) {
+    if (is_ascii_space((unsigned char)data[i])) {
       if (!in_space) {
         if (out_len < out_cap)
-          out[out_len++] = ' ';
+          out[out_len++] = (char8_t)' ';
         in_space = true;
       }
       continue;
@@ -1908,8 +1950,8 @@ static size_t normalize_sentence(const uint8_t *data, size_t len, uint8_t *out,
   return out_len;
 }
 
-static bool emit_sentence(const uint8_t *data, size_t len, SentenceSet *seen,
-                          uint8_t *norm_buf, size_t norm_cap, uint8_t *out_buf,
+static bool emit_sentence(const char8_t *data, size_t len, SentenceSet *seen,
+                          char8_t *norm_buf, size_t norm_cap, char8_t *out_buf,
                           size_t *out_pos, size_t out_cap, size_t *out_unique,
                           size_t *out_duplicates, FILE *duplicates_fp) {
   size_t norm_len = normalize_sentence(data, len, norm_buf, norm_cap);
@@ -1928,7 +1970,7 @@ static bool emit_sentence(const uint8_t *data, size_t len, SentenceSet *seen,
       return false;
     }
     if (*out_pos > 0) {
-      out_buf[(*out_pos)++] = '\n';
+      out_buf[(*out_pos)++] = (char8_t)'\n';
     }
     memcpy(out_buf + *out_pos, norm_buf, norm_len);
     *out_pos += norm_len;
@@ -1946,10 +1988,10 @@ static bool emit_sentence(const uint8_t *data, size_t len, SentenceSet *seen,
   return true;
 }
 
-static bool deduplicate_sentences(const uint8_t *input, size_t len,
-                                  SentenceSet *seen, uint8_t **out,
-                                  size_t *out_len, size_t *out_unique,
-                                  size_t *out_duplicates, FILE *duplicates_fp) {
+[[nodiscard]] static bool
+deduplicate_sentences(const char8_t *input, size_t len, SentenceSet *seen,
+                      char8_t **out, size_t *out_len, size_t *out_unique,
+                      size_t *out_duplicates, FILE *duplicates_fp) {
   if (!out || !out_len || !out_unique || !out_duplicates || !seen)
     return false;
   *out = nullptr;
@@ -1966,10 +2008,10 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
     return false;
   }
 
-  uint8_t *buffer = malloc(out_cap);
+  char8_t *buffer = malloc(out_cap);
   if (!buffer)
     return false;
-  uint8_t *norm_buf = malloc(len);
+  char8_t *norm_buf = malloc(len);
   if (!norm_buf) {
     free(buffer);
     return false;
@@ -1983,7 +2025,7 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
   for (size_t i = 0; i < sentences.count; ++i) {
     const char *sentence = sentences.sentences[i].start;
     size_t sentence_len = sentences.sentences[i].len;
-    if (!emit_sentence((const uint8_t *)sentence, sentence_len, seen, norm_buf,
+    if (!emit_sentence((const char8_t *)sentence, sentence_len, seen, norm_buf,
                        len, buffer, &out_pos, out_cap, out_unique,
                        out_duplicates, duplicates_fp)) {
       free_sentence_list(&sentences);
@@ -2007,7 +2049,8 @@ static bool deduplicate_sentences(const uint8_t *input, size_t len,
   return true;
 }
 
-static bool read_file_bytes(const char *path, uint8_t **out, size_t *out_len) {
+[[nodiscard]] static bool read_file_bytes(const char *path, char8_t **out,
+                                          size_t *out_len) {
   if (!path || !out || !out_len)
     return false;
 
@@ -2041,7 +2084,7 @@ static bool read_file_bytes(const char *path, uint8_t **out, size_t *out_len) {
     fclose(fp);
     return false;
   }
-  uint8_t *buffer = malloc(alloc_size);
+  char8_t *buffer = malloc(alloc_size);
   if (!buffer) {
     fprintf(stderr, "Failed to allocate text buffer for: %s\n", path);
     fclose(fp);
@@ -2055,15 +2098,15 @@ static bool read_file_bytes(const char *path, uint8_t **out, size_t *out_len) {
     free(buffer);
     return false;
   }
-  buffer[byte_len] = '\0';
+  buffer[byte_len] = (char8_t)'\0';
 
   *out = buffer;
   *out_len = byte_len;
   return true;
 }
 
-static bool write_file_bytes(const char *path, const uint8_t *data,
-                             size_t len) {
+[[nodiscard]] static bool write_file_bytes(const char *path,
+                                           const char8_t *data, size_t len) {
   FILE *fp = fopen(path, "wb");
   if (!fp) {
     fprintf(stderr, "Failed to open output file: %s\n", path);
@@ -2199,11 +2242,12 @@ static void render_progress(size_t done, size_t total, size_t bytes_done,
 
 static void print_usage(const char *prog) {
   fprintf(stderr,
-          "Usage: %s <input_dir> <output_dir> [mask] [--write-duplicates]\n",
+          "Usage: %s <input_dir> <output_dir> [mask] [--write-duplicates] "
+          "[--build-block-tree]\n",
           prog);
 }
 
-static bool process_text(const char *label, const uint8_t *raw_text,
+static bool process_text(const char *label, const char8_t *raw_text,
                          size_t byte_len) {
   uint32_t *text = nullptr;
   size_t len = 0;
@@ -2264,8 +2308,9 @@ static bool process_text(const char *label, const uint8_t *raw_text,
 
 static bool process_batch(FileItem *batch, size_t batch_count,
                           const char *output_dir, SentenceSet *seen,
-                          FILE *duplicates_fp, size_t *files_written,
-                          size_t *files_empty, size_t *unique_sentences,
+                          FILE *duplicates_fp, bool build_block_tree,
+                          size_t *files_written, size_t *files_empty,
+                          size_t *unique_sentences,
                           size_t *duplicate_sentences, size_t *errors,
                           size_t *processed, size_t *bytes_processed,
                           size_t total_files, double start_time) {
@@ -2294,7 +2339,7 @@ static bool process_batch(FileItem *batch, size_t batch_count,
       continue;
     }
 
-    uint8_t *deduped = nullptr;
+    char8_t *deduped = nullptr;
     size_t deduped_len = 0;
     size_t file_unique = 0;
     size_t file_duplicates = 0;
@@ -2350,8 +2395,10 @@ static bool process_batch(FileItem *batch, size_t batch_count,
 
     (*files_written)++;
 
-    if (!process_text(item->name, deduped, deduped_len)) {
-      (*errors)++;
+    if (build_block_tree) {
+      if (!process_text(item->name, deduped, deduped_len)) {
+        (*errors)++;
+      }
     }
 
     free(output_path);
@@ -2379,11 +2426,16 @@ int main(int argc, char **argv) {
   const char *mask = DEFAULT_MASK;
   bool mask_set = false;
   bool write_duplicates = false;
+  bool build_block_tree = false;
 
   for (int i = 1; i < argc; ++i) {
     const char *arg = argv[i];
     if (strcmp(arg, "--write-duplicates") == 0) {
       write_duplicates = true;
+      continue;
+    }
+    if (strcmp(arg, "--build-block-tree") == 0) {
+      build_block_tree = true;
       continue;
     }
     if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
@@ -2495,8 +2547,23 @@ int main(int argc, char **argv) {
     }
 
     if (items_count == items_cap) {
-      size_t next_cap = items_cap == 0 ? 256 : items_cap * 2;
-      FileItem *next = realloc(items, next_cap * sizeof(*items));
+      size_t next_cap = 256;
+      if (items_cap != 0 && ckd_mul(&next_cap, items_cap, (size_t)2)) {
+        fprintf(stderr, "Failed to grow file list.\n");
+        free(name_copy);
+        free(input_path);
+        errors++;
+        break;
+      }
+      size_t alloc_size = 0;
+      if (ckd_mul(&alloc_size, next_cap, sizeof(*items))) {
+        fprintf(stderr, "Failed to grow file list.\n");
+        free(name_copy);
+        free(input_path);
+        errors++;
+        break;
+      }
+      FileItem *next = realloc(items, alloc_size);
       if (!next) {
         fprintf(stderr, "Failed to grow file list.\n");
         free(name_copy);
@@ -2540,9 +2607,10 @@ int main(int argc, char **argv) {
         }
 
         if (!process_batch(batch, batch_count, output_dir, &seen, duplicates_fp,
-                           &files_written, &files_empty, &unique_sentences,
-                           &duplicate_sentences, &errors, &processed,
-                           &bytes_processed, items_count, start_time)) {
+                           build_block_tree, &files_written, &files_empty,
+                           &unique_sentences, &duplicate_sentences, &errors,
+                           &processed, &bytes_processed, items_count,
+                           start_time)) {
           abort_scan = true;
           break;
         }

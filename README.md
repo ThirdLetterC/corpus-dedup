@@ -10,7 +10,8 @@ High-level pipeline (per run):
 2. Read file bytes, split into sentences, normalize whitespace, and insert into
    a hash set; write unique sentences to the output file and optionally append
    duplicates to `duplicates.txt`.
-3. Build a Block Tree over the deduplicated text for verification/analysis.
+3. (Optional, `--build-block-tree`) Build a Block Tree over the deduplicated
+   text for verification/analysis.
 
 Block Tree construction (per file):
 
@@ -48,3 +49,5 @@ Optional flags:
 
 - `--write-duplicates` to write duplicate sentences into `duplicates.txt` in the
   output directory (disabled by default).
+- `--build-block-tree` to construct a Block Tree over the deduplicated output
+  (disabled by default).
