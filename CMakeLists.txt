@@ -39,7 +39,7 @@ set(SRC
 add_executable(corpus_dedup ${SRC})
 target_compile_features(corpus_dedup PRIVATE c_std_23)
 set_target_properties(corpus_dedup PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED YES)
-target_include_directories(corpus_dedup PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(corpus_dedup PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(corpus_dedup PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 find_package(Threads REQUIRED)
@@ -48,7 +48,7 @@ target_link_libraries(corpus_dedup PRIVATE Threads::Threads)
 if(USE_ASM)
   enable_language(ASM_NASM)
   set(ASM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/asm)
-  set(ASM_DEFS ${CMAKE_CURRENT_SOURCE_DIR}/block_tree_asm_defs.h)
+  set(ASM_DEFS ${CMAKE_CURRENT_SOURCE_DIR}/include/block_tree_asm_defs.h)
   set(ASM_OUT
     ${CMAKE_CURRENT_BINARY_DIR}/hash_worker.o
     ${CMAKE_CURRENT_BINARY_DIR}/radix_histogram_length.o
@@ -63,7 +63,7 @@ if(USE_ASM)
     COMMAND ${CMAKE_C_COMPILER} -x assembler-with-cpp -c
             -DHASH_UNROLL=${HASH_UNROLL}
             -DHASH_PREFETCH_DISTANCE=${HASH_PREFETCH_DISTANCE}
-            -I${CMAKE_CURRENT_SOURCE_DIR}
+            -I${CMAKE_CURRENT_SOURCE_DIR}/include
             ${ASM_DIR}/hash_worker.asm
             -o ${CMAKE_CURRENT_BINARY_DIR}/hash_worker.o
     DEPENDS ${ASM_DIR}/hash_worker.asm ${ASM_DEFS}
@@ -73,7 +73,7 @@ if(USE_ASM)
     add_custom_command(
       OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${f}.o
       COMMAND ${CMAKE_C_COMPILER} -x assembler-with-cpp -c
-              -I${CMAKE_CURRENT_SOURCE_DIR}
+              -I${CMAKE_CURRENT_SOURCE_DIR}/include
               ${ASM_DIR}/${f}.asm
               -o ${CMAKE_CURRENT_BINARY_DIR}/${f}.o
       DEPENDS ${ASM_DIR}/${f}.asm ${ASM_DEFS}
