@@ -12,9 +12,6 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    env:
-      BUILD_DIR: build/release
-      BINARY_NAME: corpus_dedup
 
     steps:
       - name: Checkout
@@ -41,7 +38,7 @@ jobs:
             exit 1
           fi
           strip "${binary_path}" || true
-          tar -czf "${BINARY_NAME}-linux-x86_64.tar.gz" -C "./build/release/release" "${BINARY_NAME}"
+          tar -czf "corpus_dedup-linux-x86_64.tar.gz" -C "./build/release/release" corpus_dedup
 
       - name: Create release
         uses: softprops/action-gh-release@v1
@@ -49,4 +46,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            ${BINARY_NAME}-linux-x86_64.tar.gz
+            corpus_dedup-linux-x86_64.tar.gz
