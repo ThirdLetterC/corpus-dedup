@@ -41,7 +41,7 @@ jobs:
             exit 1
           fi
           strip "${binary_path}" || true
-          tar -czf "${BINARY_NAME}-linux-x86_64.tar.gz" -C "${BUILD_DIR}" "${BINARY_NAME}"
+          tar -czf "${BINARY_NAME}-linux-x86_64.tar.gz" -C "./build/release/release" "${BINARY_NAME}"
 
       - name: Create release
         uses: softprops/action-gh-release@v1
