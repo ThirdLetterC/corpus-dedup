@@ -116,6 +116,7 @@ Dedup summary (sentence-level): matched 1028000 file(s), wrote 1027601, empty 39
 
 - Practical Parallel Block Tree Construction: https://arxiv.org/abs/2512.23314
 - New Sorting Algorithm Wave Sort (W-Sort): https://arxiv.org/abs/2505.13552
+- W-Sort assembly code: https://github.com/egorsmkv/wavesort-c
 
 ## License
 
