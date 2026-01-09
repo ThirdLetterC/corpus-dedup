@@ -32,13 +32,13 @@ jobs:
 
       - name: Package binary
         run: |
-          binary_path="./build/release/release/corpus_dedup"
+          binary_path="./build/release/corpus_dedup"
           if [ ! -f "${binary_path}" ]; then
             echo "Binary not found at ${binary_path}"
             exit 1
           fi
           strip "${binary_path}" || true
-          tar -czf "corpus_dedup-linux-x86_64.tar.gz" -C "./build/release/release" corpus_dedup
+          tar -czf "corpus_dedup-linux-x86_64.tar.gz" -C "./build/release/corpus_dedup" corpus_dedup
 
       - name: Create release
         uses: softprops/action-gh-release@v1
