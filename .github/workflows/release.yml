@@ -30,8 +30,8 @@ jobs:
 
       - name: Build (make release)
         run: |
-          find . -name "corpus_dedup"
           CC=gcc-14 CXX=g++-14 make release
+          find . -name "corpus_dedup"
 
       - name: Package binary
         run: |
