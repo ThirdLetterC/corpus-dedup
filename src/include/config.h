@@ -12,6 +12,9 @@ constexpr size_t FILE_BATCH_SIZE = 4'096;
 constexpr size_t DEFAULT_MAX_COMPARE_LENGTH = 0; // symbols; 0 = unlimited
 extern const char *DUPLICATES_FILENAME;
 extern const char *DEFAULT_MASK;
+extern const char PROGRAM_AUTHOR[];
+extern const char PROGRAM_COPYRIGHT[];
+extern const char PROGRAM_LICENSE_NAME[];
 constexpr size_t SENTENCE_ARENA_BLOCK_SIZE = 64 * 1'024;
 constexpr size_t HASH_PARALLEL_BASE = 64;
 constexpr size_t RADIX_SORT_MIN_COUNT = 64;

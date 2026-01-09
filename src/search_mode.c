@@ -26,6 +26,18 @@ typedef struct {
   size_t text_len;
 } SearchFile;
 
+static void print_search_help(const char *prog) {
+  printf("Usage:\n"
+         "  %s <input_dir> [mask] [--limit N]\n"
+         "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
+         "RADIX_SORT_USE_ASM=%d\n"
+         "  Author: %s\n"
+         "  License: %s\n"
+         "  Copyright: %s\n",
+         prog, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM,
+         PROGRAM_AUTHOR, PROGRAM_LICENSE_NAME, PROGRAM_COPYRIGHT);
+}
+
 static bool parse_size_arg(const char *value, size_t *out) {
   if (!value || !out)
     return false;
@@ -425,11 +437,7 @@ int run_search(const char *prog, int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     const char *arg = argv[i];
     if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-      printf("Usage:\n"
-             "  %s <input_dir> [mask] [--limit N]\n"
-             "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
-             "RADIX_SORT_USE_ASM=%d\n",
-             prog, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+      print_search_help(prog);
       return 0;
     }
     if (strcmp(arg, "--limit") == 0) {
@@ -466,20 +474,12 @@ int run_search(const char *prog, int argc, char **argv) {
       continue;
     }
     fprintf(stderr, "Unexpected argument: %s\n", arg);
-    printf("Usage:\n"
-           "  %s <input_dir> [mask] [--limit N]\n"
-           "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
-           "RADIX_SORT_USE_ASM=%d\n",
-           prog, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+    print_search_help(prog);
     return 1;
   }
 
   if (!input_dir) {
-    printf("Usage:\n"
-           "  %s <input_dir> [mask] [--limit N]\n"
-           "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
-           "RADIX_SORT_USE_ASM=%d\n",
-           prog, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+    print_search_help(prog);
     return 1;
   }
 

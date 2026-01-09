@@ -13,7 +13,7 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     env:
-      BUILD_DIR: build/release/release
+      BUILD_DIR: build/release
       BINARY_NAME: corpus_dedup
 
     steps:
@@ -29,7 +29,9 @@ jobs:
           sudo apt-get install -y gcc-14 g++-14 cmake nasm build-essential
 
       - name: Build (make release)
-        run: CC=gcc-14 CXX=g++-14 make release
+        run: |
+          find . -name "corpus_dedup"
+          CC=gcc-14 CXX=g++-14 make release
 
       - name: Package binary
         run: |

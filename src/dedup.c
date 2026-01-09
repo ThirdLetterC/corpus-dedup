@@ -56,6 +56,22 @@ typedef struct {
   atomic_size_t bytes_processed;
 } BatchStats;
 
+static void print_dedup_help(const char *prog) {
+  printf("Usage:\n"
+         "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
+         "<sentence|line|paragraph|document>] "
+         "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
+         "  --max-length defaults to %zu symbols (0 is unlimited)\n"
+         "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
+         "RADIX_SORT_USE_ASM=%d\n"
+         "  Author: %s\n"
+         "  License: %s\n"
+         "  Copyright: %s\n",
+         prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM, HASH_WORKER_USE_ASM,
+         RADIX_SORT_USE_ASM, PROGRAM_AUTHOR, PROGRAM_LICENSE_NAME,
+         PROGRAM_COPYRIGHT);
+}
+
 static const char *dedup_mode_name(DedupMode mode) {
   switch (mode) {
   case DEDUP_MODE_LINE:
@@ -846,15 +862,7 @@ int run_dedup(const char *prog, int argc, char **argv) {
       continue;
     }
     if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
-      printf("Usage:\n"
-             "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
-             "<sentence|line|paragraph|document>] "
-             "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-             "  --max-length defaults to %zu symbols (0 is unlimited)\n"
-             "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
-             "RADIX_SORT_USE_ASM=%d\n",
-             prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
-             HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+      print_dedup_help(prog);
       return 0;
     }
     if (!input_dir) {
@@ -871,25 +879,12 @@ int run_dedup(const char *prog, int argc, char **argv) {
       continue;
     }
     fprintf(stderr, "Unexpected argument: %s\n", arg);
-    printf("Usage:\n"
-           "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
-           "<sentence|line|paragraph|document>] "
-           "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-           "  --max-length defaults to %zu symbols (0 is unlimited)\n"
-           "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
-           "RADIX_SORT_USE_ASM=%d\n",
-           prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
-           HASH_WORKER_USE_ASM, RADIX_SORT_USE_ASM);
+    print_dedup_help(prog);
     return 1;
   }
 
   if (!input_dir || !output_dir) {
-    printf("Usage:\n"
-           "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
-           "<sentence|line|paragraph|document>] "
-           "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-           "  --max-length defaults to %zu symbols (0 is unlimited)\n",
-           prog, DEFAULT_MAX_COMPARE_LENGTH);
+    print_dedup_help(prog);
     return 1;
   }
 

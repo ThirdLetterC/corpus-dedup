@@ -1,4 +1,4 @@
-# Corpus Deduplication Tool
+# `corpus_dedup`
 
 Parallel Block Tree construction and text deduplication tool (line, sentence, paragraph, or document level) in ISO C23.
 
