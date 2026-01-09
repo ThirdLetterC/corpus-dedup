@@ -8,7 +8,7 @@ endif()
 set(CMAKE_C_COMPILER clang)
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_C_EXTENSIONS ON)
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
