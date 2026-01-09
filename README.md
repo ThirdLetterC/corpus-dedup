@@ -112,6 +112,11 @@ Optional flags:
 Dedup summary (sentence-level): matched 1028000 file(s), wrote 1027601, empty 399, unique sentences 23899195, duplicate sentences 2880953 (10.76%), errors 0, elapsed 0.21 min, peak RSS 5923.57 MiB
 ```
 
+## Acknowledgements
+
+- Practical Parallel Block Tree Construction: https://arxiv.org/abs/2512.23314
+- New Sorting Algorithm Wave Sort (W-Sort): https://arxiv.org/abs/2505.13552
+
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for details.
