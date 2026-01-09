@@ -29,11 +29,8 @@ jobs:
           sudo ./llvm.sh 21
           sudo apt-get install -y cmake nasm build-essential
 
-      - name: Configure (Release)
-        run: CC=clang-21 CXX=clang++-21 cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DUSE_ASM=ON
-
-      - name: Build
-        run: cmake --build "${BUILD_DIR}" --config Release --parallel
+      - name: Build (make release)
+        run: CC=clang-21 CXX=clang++-21 make release
 
       - name: Package binary
         run: |
