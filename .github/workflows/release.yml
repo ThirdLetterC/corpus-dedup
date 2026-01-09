@@ -23,10 +23,16 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld cmake nasm build-essential
+          sudo apt-get install -y wget gnupg software-properties-common
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          sudo apt-get install -y clang-21 lld-21 cmake nasm build-essential
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 100 \
+            --slave /usr/bin/clang++ clang++ /usr/bin/clang++-21
 
       - name: Configure (Release)
-        run: cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DUSE_ASM=ON
+        run: CC=clang-21 CXX=clang++-21 cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DUSE_ASM=ON
 
       - name: Build
         run: cmake --build "${BUILD_DIR}" --config Release --parallel
