@@ -101,3 +101,17 @@ Optional flags:
   (disabled by default).
 - `--limit N` in search mode stops indexing after `N` files (required to be
   positive when provided).
+
+## Benchmark
+
+```
+> DEDUP_THREADS=8 ./build/release/corpus_dedup data/kobza_1 outk
+
+[##############################] 1028000/1028000 100.0% 88806.64 docs/s 426.17 MB/s ETA 0.0m
+
+Dedup summary (sentence-level): matched 1028000 file(s), wrote 1027601, empty 399, unique sentences 23899195, duplicate sentences 2880953 (10.76%), errors 0, elapsed 0.21 min, peak RSS 5923.57 MiB
+```
+
+## License
+
+This project is licensed under the MIT License. See the LICENSE file for details.
