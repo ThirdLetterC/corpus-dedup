@@ -35,7 +35,7 @@ jobs:
 
       - name: Package binary
         run: |
-          binary_path="${BUILD_DIR}/${BINARY_NAME}"
+          binary_path="./build/release/release/corpus_dedup"
           if [ ! -f "${binary_path}" ]; then
             echo "Binary not found at ${binary_path}"
             exit 1
