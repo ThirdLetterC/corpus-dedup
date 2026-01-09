@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_DIR: build/release
+      BINARY_NAME: corpus_dedup
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake nasm build-essential
+
+      - name: Configure (Release)
+        run: cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DUSE_ASM=ON
+
+      - name: Build
+        run: cmake --build "${BUILD_DIR}" --config Release --parallel
+
+      - name: Package binary
+        run: |
+          binary_path="${BUILD_DIR}/${BINARY_NAME}"
+          if [ ! -f "${binary_path}" ]; then
+            echo "Binary not found at ${binary_path}"
+            exit 1
+          fi
+          strip "${binary_path}" || true
+          tar -czf "${BINARY_NAME}-linux-x86_64.tar.gz" -C "${BUILD_DIR}" "${BINARY_NAME}"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            ${BINARY_NAME}-linux-x86_64.tar.gz
