@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "verify_mode.h"
 #include "ckdint_compat.h"
 #include "config.h"
 #include "io_utils.h"
@@ -14,6 +13,7 @@
 #include "sentence_splitter.h"
 #include "text_utils.h"
 #include "utf8.h"
+#include "verify_mode.h"
 
 constexpr size_t SPAN_INIT_CAP = 16;
 

@@ -9,8 +9,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "io_utils.h"
 #include "ckdint_compat.h"
+#include "io_utils.h"
 #include "utf8.h"
 
 bool read_file_bytes(const char *path, char8_t **out, size_t *out_len) {

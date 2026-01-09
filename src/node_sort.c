@@ -2,10 +2,10 @@
 #include <string.h>
 #include <threads.h>
 
-#include "node_sort.h"
 #include "block_tree_asm_defs.h"
 #include "ckdint_compat.h"
 #include "config.h"
+#include "node_sort.h"
 
 #ifndef WAVESORT_USE_ASM
 #if defined(__AVX2__) && defined(__x86_64__) &&                                \

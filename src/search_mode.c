@@ -9,7 +9,6 @@
 #include <threads.h>
 #include <unistd.h>
 
-#include "search_mode.h"
 #include "arena.h"
 #include "block_tree.h"
 #include "ckdint_compat.h"
@@ -17,6 +16,7 @@
 #include "hash_pool.h"
 #include "io_utils.h"
 #include "progress.h"
+#include "search_mode.h"
 #include "text_utils.h"
 #include "utf8.h"
 

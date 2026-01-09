@@ -10,11 +10,11 @@
 #include <threads.h>
 #include <unistd.h>
 
-#include "dedup.h"
 #include "arena.h"
 #include "block_tree.h"
 #include "ckdint_compat.h"
 #include "config.h"
+#include "dedup.h"
 #include "hash_utils.h"
 #include "io_utils.h"
 #include "progress.h"

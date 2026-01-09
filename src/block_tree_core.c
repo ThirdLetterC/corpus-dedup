@@ -6,8 +6,8 @@
 #include <threads.h>
 #include <unistd.h>
 
-#include "block_tree.h"
 #include "arena.h"
+#include "block_tree.h"
 #include "block_tree_asm_defs.h"
 #include "ckdint_compat.h"
 #include "config.h"

@@ -2,10 +2,10 @@
 #include <string.h>
 #include <threads.h>
 
-#include "sentence_set.h"
 #include "ckdint_compat.h"
 #include "config.h"
 #include "hash_utils.h"
+#include "sentence_set.h"
 
 typedef struct SentenceArenaBlock {
   uint8_t *data;
