@@ -23,14 +23,13 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget gnupg software-properties-common
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 21
-          sudo apt-get install -y cmake nasm build-essential
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 cmake nasm build-essential
 
       - name: Build (make release)
-        run: CC=clang-21 CXX=clang++-21 make release
+        run: CC=gcc-14 CXX=g++-14 make release
 
       - name: Package binary
         run: |
