@@ -366,7 +366,7 @@ int run_verify(const char *prog, int argc, char **argv) {
     if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
       printf("Usage:\n  %s --verify <dedup_dir> [mask] [--dedup-mode "
              "<sentence|line|paragraph|document>] [--max-length N]\n"
-             "  --max-length defaults to %zu symbols (0 disables the limit)\n"
+             "  --max-length defaults to %zu symbols (0 is unlimited)\n"
              "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
              "RADIX_SORT_USE_ASM=%d\n",
              prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
@@ -423,7 +423,7 @@ int run_verify(const char *prog, int argc, char **argv) {
     fprintf(stderr, "Unexpected argument: %s\n", arg);
     printf("Usage:\n  %s --verify <dedup_dir> [mask] [--dedup-mode "
            "<sentence|line|paragraph|document>] [--max-length N]\n"
-           "  --max-length defaults to %zu symbols (0 disables the limit)\n"
+           "  --max-length defaults to %zu symbols (0 is unlimited)\n"
            "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
            "RADIX_SORT_USE_ASM=%d\n",
            prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
@@ -434,7 +434,7 @@ int run_verify(const char *prog, int argc, char **argv) {
   if (!input_dir) {
     printf("Usage:\n  %s --verify <dedup_dir> [mask] [--dedup-mode "
            "<sentence|line|paragraph|document>] [--max-length N]\n"
-           "  --max-length defaults to %zu symbols (0 disables the limit)\n"
+           "  --max-length defaults to %zu symbols (0 is unlimited)\n"
            "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
            "RADIX_SORT_USE_ASM=%d\n",
            prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,

@@ -94,7 +94,7 @@ Optional flags:
 - `--dedup-mode <sentence|line|paragraph|document>` sets dedup granularity
   (default: sentence-level).
 - `--max-length N` caps normalized text length used for comparisons
-  (default: 10,000 symbols; 0 disables the limit) in dedup and verify modes.
+  (default: 0, unlimited) in dedup and verify modes.
 - `--write-duplicates` writes duplicate units into `duplicates.txt` in the
   output directory (disabled by default).
 - `--build-block-tree` constructs a Block Tree over the deduplicated output

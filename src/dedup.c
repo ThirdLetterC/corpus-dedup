@@ -850,7 +850,7 @@ int run_dedup(const char *prog, int argc, char **argv) {
              "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
              "<sentence|line|paragraph|document>] "
              "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-             "  --max-length defaults to %zu symbols (0 disables the limit)\n"
+             "  --max-length defaults to %zu symbols (0 is unlimited)\n"
              "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
              "RADIX_SORT_USE_ASM=%d\n",
              prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
@@ -875,7 +875,7 @@ int run_dedup(const char *prog, int argc, char **argv) {
            "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
            "<sentence|line|paragraph|document>] "
            "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-           "  --max-length defaults to %zu symbols (0 disables the limit)\n"
+           "  --max-length defaults to %zu symbols (0 is unlimited)\n"
            "  ASM: WAVESORT_USE_ASM=%d HASH_WORKER_USE_ASM=%d "
            "RADIX_SORT_USE_ASM=%d\n",
            prog, DEFAULT_MAX_COMPARE_LENGTH, WAVESORT_USE_ASM,
@@ -888,7 +888,7 @@ int run_dedup(const char *prog, int argc, char **argv) {
            "  %s <input_dir> <output_dir> [mask] [--dedup-mode "
            "<sentence|line|paragraph|document>] "
            "[--write-duplicates] [--build-block-tree] [--max-length N]\n"
-           "  --max-length defaults to %zu symbols (0 disables the limit)\n",
+           "  --max-length defaults to %zu symbols (0 is unlimited)\n",
            prog, DEFAULT_MAX_COMPARE_LENGTH);
     return 1;
   }

@@ -9,7 +9,7 @@ constexpr uint64_t HASH_MULT = 31ULL;
 constexpr size_t THREAD_COUNT_FALLBACK = 4;
 constexpr size_t ARENA_BLOCK_SIZE = 64 * 1'024 * 1'024; // 64 MiB
 constexpr size_t FILE_BATCH_SIZE = 4'096;
-constexpr size_t DEFAULT_MAX_COMPARE_LENGTH = 10'000; // symbols; 0 = unlimited
+constexpr size_t DEFAULT_MAX_COMPARE_LENGTH = 0; // symbols; 0 = unlimited
 extern const char *DUPLICATES_FILENAME;
 extern const char *DEFAULT_MASK;
 constexpr size_t SENTENCE_ARENA_BLOCK_SIZE = 64 * 1'024;
