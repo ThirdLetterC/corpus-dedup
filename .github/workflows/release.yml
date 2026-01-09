@@ -38,7 +38,7 @@ jobs:
             exit 1
           fi
           strip "${binary_path}" || true
-          tar -czf "corpus_dedup-linux-x86_64.tar.gz" -C "./build/release/corpus_dedup" corpus_dedup
+          tar -czf "corpus_dedup-linux-x86_64.tar.gz" -C "./build/release" corpus_dedup
 
       - name: Create release
         uses: softprops/action-gh-release@v1
