@@ -13,7 +13,7 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     env:
-      BUILD_DIR: build/release
+      BUILD_DIR: build/release/release
       BINARY_NAME: corpus_dedup
 
     steps:
